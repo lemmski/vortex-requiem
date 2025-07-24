@@ -31,7 +31,12 @@
 			"Name": "GameplayStateTree",
 			"Enabled": true
 		},
-		{ "Name":  "PCG",
+		{
+			"Name": "PCG",
+			"Enabled": true
+		},
+		{
+			"Name": "Water",
 			"Enabled": true
 		}
 	]
