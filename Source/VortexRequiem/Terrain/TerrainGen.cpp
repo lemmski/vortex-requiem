@@ -239,6 +239,6 @@ void ATerrainGen::GenerateTerrain()
     NavKickTime = FPlatformTime::Seconds() - NavKickStart;
 
     double Total = FPlatformTime::Seconds() - OverallStart;
-    UE_LOG(LogTemp, Log, TEXT("Breakdown ms | Mask:%5.1f  Vert:%5.1f  Tri:%5.1f  Upload:%5.1f  NavKick:%5.1f  TOTAL:%6.1f"),
+    UE_LOG(LogTemp, Log, TEXT("Timing ms | Mask creation:%6.1f  Vertex fill:%6.1f  Triangle list:%6.1f  GPU upload:%6.1f  Nav-mesh kick:%6.1f  Total:%6.1f"),
         MaskTime*1000, VertTime*1000, TriTime*1000, UploadTime*1000, NavKickTime*1000, Total*1000);
 }
