@@ -32,6 +32,11 @@ ATerrainGen::ATerrainGen()
 #endif
 }
 
+void ATerrainGen::Regenerate()
+{
+    GenerateTerrain();
+}
+
 void ATerrainGen::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);

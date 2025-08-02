@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
+using System.IO;
 
 public class VortexRequiem : ModuleRules
 {
@@ -32,7 +33,7 @@ public class VortexRequiem : ModuleRules
 			"VortexRequiem/Variant_Horror",
 			"VortexRequiem/Variant_Shooter",
 			"VortexRequiem/Variant_Shooter/AI",
-			"../ThirdParty"
+			Path.Combine(ModuleDirectory, "../ThirdParty")
 		});
 
 		// Uncomment if you are using Slate UI

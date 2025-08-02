@@ -48,6 +48,9 @@ private:
     UPROPERTY(VisibleAnywhere)
     UProceduralMeshComponent* Mesh;
 
+    UFUNCTION(CallInEditor, Category="Terrain")
+    void Regenerate();
+
     void GenerateTerrain();
     static bool LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int32& OutHeight, TArray<uint8>& OutData);
 };
