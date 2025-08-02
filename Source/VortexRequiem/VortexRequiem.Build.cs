@@ -31,7 +31,8 @@ public class VortexRequiem : ModuleRules
 			"VortexRequiem",
 			"VortexRequiem/Variant_Horror",
 			"VortexRequiem/Variant_Shooter",
-			"VortexRequiem/Variant_Shooter/AI"
+			"VortexRequiem/Variant_Shooter/AI",
+			"../ThirdParty"
 		});
 
 		// Uncomment if you are using Slate UI

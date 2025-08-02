@@ -8,6 +8,7 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "NavigationSystem.h"
 #include "NavigationSystemTypes.h"
+#include "ProcTerrain.h"
 
 ATerrainGen::ATerrainGen()
 {
@@ -97,8 +98,28 @@ void ATerrainGen::GenerateTerrain()
 
     if (!bLoaded || W == 0 || H == 0)
     {
-        UE_LOG(LogTemp, Warning, TEXT("ATerrainGen: Heightmap load failed"));
-        return;
+        UE_LOG(LogTemp, Warning, TEXT("ATerrainGen: Heightmap load failed – generating procedural fallback"));
+
+        // --- Procedural fallback ---
+        W = 1024;
+        H = 1024;
+        const int32 Seed = FMath::Rand();
+
+        FProcTerrain PT(W, H, Seed);
+        FFBMSettings FBMSettings;
+        FThermalSettings ThermalSettings;
+        FHydraulicSettings HydraulicSettings;
+
+        PT.GenerateFBM(FBMSettings);
+        PT.ApplyThermal(ThermalSettings);
+        PT.ApplyHydraulic(HydraulicSettings);
+
+        HeightData.SetNumUninitialized(W * H);
+        for (int32 i = 0; i < W * H; ++i)
+        {
+            HeightData[i] = static_cast<uint8>(FMath::Clamp(PT.HeightMap[i] * 255.0f, 0.0f, 255.0f));
+        }
+        bLoaded = true;
     }
 
     // Acquire nav-system lock to suppress per-section rebuilds
