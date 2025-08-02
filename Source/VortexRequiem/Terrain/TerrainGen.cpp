@@ -5,6 +5,9 @@
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "Engine/CollisionProfile.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "NavigationSystem.h"
+#include "NavigationSystemTypes.h"
 
 ATerrainGen::ATerrainGen()
 {
@@ -13,6 +16,7 @@ ATerrainGen::ATerrainGen()
     Mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("ProcMesh"));
     SetRootComponent(Mesh);
     Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+    Mesh->bUseAsyncCooking = true;
 
     // Reasonable defaults
     PngPath = TEXT("Content/Levels/OldWorldAnomalyLvl/old_world_anomaly_2k.png");
@@ -20,6 +24,7 @@ ATerrainGen::ATerrainGen()
     XYScale = 10.f;
     ZScale  = 10.f;
     TileQuads = 127;
+    HeightTolerance = 5.f;
 
 #if WITH_EDITORONLY_DATA
     Mesh->bUseComplexAsSimpleCollision = true;
@@ -96,58 +101,144 @@ void ATerrainGen::GenerateTerrain()
         return;
     }
 
-    // Clear previous mesh sections
+    // Acquire nav-system lock to suppress per-section rebuilds
+    UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+    FNavigationLockContext NavLock(GetWorld(), ENavigationLockReason::Unknown);
+
+    // Clear and disable nav while rebuilding mesh
     Mesh->ClearAllMeshSections();
+    Mesh->SetCanEverAffectNavigation(false);
 
-    const int32 QuadsPerTile = FMath::Max(1, TileQuads);
-    int32 SectionIdx = 0;
+    // timing variables
+    double OverallStart = FPlatformTime::Seconds();
+    double MaskTime = 0.0, VertTime = 0.0, TriTime = 0.0, UploadTime = 0.0, NavKickTime = 0.0;
 
-    for (int32 TileY = 0; TileY < H - 1; TileY += QuadsPerTile)
+    if (HeightTolerance <= 0.f)
     {
-        for (int32 TileX = 0; TileX < W - 1; TileX += QuadsPerTile)
+        // full resolution path
+        UE_LOG(LogTemp, Log, TEXT("Verts total: %d"), W * H);
+        TArray<FVector> Verts;        Verts.SetNumUninitialized(W * H);
+        TArray<FVector2D> UVs;        UVs.SetNumUninitialized(W * H);
+        const float Scale = ZScale / 255.f;
+        double MaskStart = FPlatformTime::Seconds();
+        // no mask step in full path
+        MaskTime = 0.0;
+        double VertStart = FPlatformTime::Seconds();
+        for (int32 y = 0; y < H; ++y)
         {
-            const int32 LocalW = FMath::Min(QuadsPerTile, (W - 1) - TileX) + 1;
-            const int32 LocalH = FMath::Min(QuadsPerTile, (H - 1) - TileY) + 1;
-            const int32 LocalVertsCount = LocalW * LocalH;
-
-            TArray<FVector> Verts;        Verts.SetNumUninitialized(LocalVertsCount);
-            TArray<FVector2D> UVs;        UVs.SetNumUninitialized(LocalVertsCount);
-
-            for (int32 y = 0; y < LocalH; ++y)
+            for (int32 x = 0; x < W; ++x)
             {
-                for (int32 x = 0; x < LocalW; ++x)
-                {
-                    const int32 GlobalX = TileX + x;
-                    const int32 GlobalY = TileY + y;
-                    const int32 HeightIdx = GlobalY * W + GlobalX;
-
-                    const float h = (HeightData[HeightIdx] / 255.f) * ZScale;
-                    const int32 vi = y * LocalW + x;
-
-                    Verts[vi] = FVector(GlobalX * XYScale, GlobalY * XYScale, h);
-                    UVs[vi]   = FVector2D((float)GlobalX / (W - 1), (float)GlobalY / (H - 1));
-                }
+                int32 idx = y * W + x;
+                float h = HeightData[idx] * Scale;
+                Verts[idx] = FVector(x * XYScale, y * XYScale, h);
+                UVs[idx]   = FVector2D((float)x / (W - 1), (float)y / (H - 1));
             }
-
-            TArray<int32> Tris;
-            Tris.Reserve((LocalW - 1) * (LocalH - 1) * 6);
-
-            for (int32 y = 0; y < LocalH - 1; ++y)
-            {
-                for (int32 x = 0; x < LocalW - 1; ++x)
-                {
-                    const int32 i  =  y      * LocalW + x;
-                    const int32 iR =  i + 1;
-                    const int32 iD = (y + 1) * LocalW + x;
-                    const int32 iDR= iD + 1;
-
-                    Tris.Append({ i, iDR, iR,  i, iD, iDR });
-                }
-            }
-
-            Mesh->CreateMeshSection_LinearColor(SectionIdx++, Verts, Tris, {}, UVs, {}, {}, true);
         }
+        VertTime = FPlatformTime::Seconds() - VertStart;
+
+        double TriStart = FPlatformTime::Seconds();
+        TArray<int32> Tris;
+        Tris.Reserve((W - 1) * (H - 1) * 6);
+        for (int32 y = 0; y < H - 1; ++y)
+        {
+            for (int32 x = 0; x < W - 1; ++x)
+            {
+                int32 i = y * W + x;
+                Tris.Append({ i, i + W + 1, i + 1,  i, i + W, i + W + 1 });
+            }
+        }
+        TriTime = FPlatformTime::Seconds() - TriStart;
+
+        double UploadStart = FPlatformTime::Seconds();
+        Mesh->CreateMeshSection_LinearColor(0, Verts, Tris, {}, UVs, {}, {}, true);
+        Mesh->SetCanEverAffectNavigation(true);
+        UploadTime = FPlatformTime::Seconds() - UploadStart;
+
+    }
+    else
+    {
+        const float Tol = HeightTolerance; // world-unit tolerance
+        // --- reduction masks ---
+        TBitArray<> KeepRow(false, H);
+        TBitArray<> KeepCol(false, W);
+        const float Scale = ZScale / 255.f;
+        for (int32 y = 0; y < H; ++y)
+        {
+            uint8 minv = 255, maxv = 0;
+            for (int32 x = 0; x < W; ++x)
+            {
+                uint8 v = HeightData[y * W + x];
+                minv = FMath::Min(minv, v);
+                maxv = FMath::Max(maxv, v);
+            }
+            if ((maxv - minv) * Scale > Tol) KeepRow[y] = true;
+        }
+        for (int32 x = 0; x < W; ++x)
+        {
+            uint8 minv = 255, maxv = 0;
+            for (int32 y = 0; y < H; ++y)
+            {
+                uint8 v = HeightData[y * W + x];
+                minv = FMath::Min(minv, v);
+                maxv = FMath::Max(maxv, v);
+            }
+            if ((maxv - minv) * Scale > Tol) KeepCol[x] = true;
+        }
+        KeepRow[0] = true;
+        KeepRow[H - 1] = true;
+        KeepCol[0] = true;
+        KeepCol[W - 1] = true;
+
+        TArray<int32> Rows, Cols;
+        for (int32 y = 0; y < H; ++y) if (KeepRow[y]) Rows.Add(y);
+        for (int32 x = 0; x < W; ++x) if (KeepCol[x]) Cols.Add(x);
+
+        int32 NewH = Rows.Num();
+        int32 NewW = Cols.Num();
+        UE_LOG(LogTemp, Log, TEXT("Verts before: %d after: %d"), W * H, NewW * NewH);
+
+        TArray<FVector> Verts;        Verts.SetNumUninitialized(NewW * NewH);
+        TArray<FVector2D> UVs;        UVs.SetNumUninitialized(NewW * NewH);
+        for (int32 yi = 0; yi < NewH; ++yi)
+        {
+            int32 gy = Rows[yi];
+            for (int32 xi = 0; xi < NewW; ++xi)
+            {
+                int32 gx = Cols[xi];
+                uint8 v = HeightData[gy * W + gx];
+                float h = v * Scale;
+                int32 idx = yi * NewW + xi;
+                Verts[idx] = FVector(gx * XYScale, gy * XYScale, h);
+                UVs[idx] = FVector2D((float)gx / (W - 1), (float)gy / (H - 1));
+            }
+        }
+        TArray<int32> Tris;
+        Tris.Reserve((NewW - 1) * (NewH - 1) * 6);
+        for (int32 y = 0; y < NewH - 1; ++y)
+        {
+            for (int32 x = 0; x < NewW - 1; ++x)
+            {
+                int32 i = y * NewW + x;
+                Tris.Append({ i, i + NewW + 1, i + 1,  i, i + NewW, i + NewW + 1 });
+            }
+        }
+        double BuildStart = FPlatformTime::Seconds();
+        Mesh->CreateMeshSection_LinearColor(0, Verts, Tris, {}, UVs, {}, {}, true);
+        Mesh->SetCanEverAffectNavigation(true);
+        double BuildDone = FPlatformTime::Seconds();
+        UploadTime = BuildDone - BuildStart;
+        UE_LOG(LogTemp, Log, TEXT("ATerrainGen: geometry upload = %.2f s"), UploadTime);
     }
 
-    Mesh->ContainsPhysicsTriMeshData(true);
+    // Lock goes out of scope here; start async nav build
+    double NavKickStart = FPlatformTime::Seconds();
+    if (NavSys)
+    {
+        NavSys->Build();
+    }
+    NavKickTime = FPlatformTime::Seconds() - NavKickStart;
+
+    double Total = FPlatformTime::Seconds() - OverallStart;
+    UE_LOG(LogTemp, Log, TEXT("Breakdown ms | Mask:%5.1f  Vert:%5.1f  Tri:%5.1f  Upload:%5.1f  NavKick:%5.1f  TOTAL:%6.1f"),
+        MaskTime*1000, VertTime*1000, TriTime*1000, UploadTime*1000, NavKickTime*1000, Total*1000);
 }

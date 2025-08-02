@@ -38,6 +38,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     int32 TileQuads;
 
+    // Height variation tolerance (world units) to merge rows/cols
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
+    float HeightTolerance;
+
     virtual void OnConstruction(const FTransform& Transform) override;
 
 private:
