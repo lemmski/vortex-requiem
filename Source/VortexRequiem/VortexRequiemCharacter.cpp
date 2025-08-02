@@ -46,6 +46,8 @@ AVortexRequiemCharacter::AVortexRequiemCharacter()
 	// Configure character movement
 	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
 	GetCharacterMovement()->AirControl = 0.5f;
+
+	bIsUsingBinoculars = false;
 }
 
 void AVortexRequiemCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -63,6 +65,9 @@ void AVortexRequiemCharacter::SetupPlayerInputComponent(UInputComponent* PlayerI
 		// Looking/Aiming
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &AVortexRequiemCharacter::LookInput);
 		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AVortexRequiemCharacter::LookInput);
+
+		// Binoculars
+		EnhancedInputComponent->BindAction(BinocularsAction, ETriggerEvent::Triggered, this, &AVortexRequiemCharacter::ToggleBinoculars);
 	}
 	else
 	{
@@ -121,4 +126,23 @@ void AVortexRequiemCharacter::DoJumpEnd()
 {
 	// pass StopJumping to the character
 	StopJumping();
+}
+
+void AVortexRequiemCharacter::ToggleBinoculars()
+{
+	// Flip the boolean
+	bIsUsingBinoculars = !bIsUsingBinoculars;
+
+	// Set the FOV based on the new state
+	if (FirstPersonCameraComponent)
+	{
+		if (bIsUsingBinoculars)
+		{
+			FirstPersonCameraComponent->SetFieldOfView(ZoomedFOV);
+		}
+		else
+		{
+			FirstPersonCameraComponent->SetFieldOfView(NormalFOV);
+		}
+	}
 }

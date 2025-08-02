@@ -1,9 +1,11 @@
 using UnrealBuildTool;
 
-public class AlePCGModule: ModuleRules
+public class AlePCGModule : ModuleRules
 {
     public AlePCGModule(ReadOnlyTargetRules Target) : base(Target)
     {
-        PrivateDependencyModuleNames.AddRange(new string[] {"Core", "CoreUObject", "Engine"});
+        PublicDependencyModuleNames.AddRange(new string[] {
+    "Core", "CoreUObject", "Engine", "InputCore", "Landscape", "PCG", "RHI", "RenderCore"
+        });
     }
 }

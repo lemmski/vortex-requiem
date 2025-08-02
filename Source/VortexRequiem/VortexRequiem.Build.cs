@@ -17,7 +17,11 @@ public class VortexRequiem : ModuleRules
 			"AIModule",
 			"StateTreeModule",
 			"GameplayStateTreeModule",
-			"UMG"
+			"UMG",
+			"ProceduralMeshComponent",
+			"ImageWrapper",
+			"RenderCore",
+			"RHI"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });

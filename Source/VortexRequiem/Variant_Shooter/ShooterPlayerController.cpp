@@ -15,8 +15,8 @@ void AShooterPlayerController::BeginPlay()
 	Super::BeginPlay();
 
 	// create the bullet counter widget and add it to the screen
-	BulletCounterUI = CreateWidget<UShooterBulletCounterUI>(this, BulletCounterUIClass);
-	BulletCounterUI->AddToPlayerScreen(0);
+	//BulletCounterUI = CreateWidget<UShooterBulletCounterUI>(this, BulletCounterUIClass);
+	//BulletCounterUI->AddToPlayerScreen(0);
 }
 
 void AShooterPlayerController::SetupInputComponent()
@@ -74,5 +74,5 @@ void AShooterPlayerController::OnPawnDestroyed(AActor* DestroyedActor)
 void AShooterPlayerController::OnBulletCountUpdated(int32 MagazineSize, int32 Bullets)
 {
 	// update the UI
-	BulletCounterUI->BP_UpdateBulletCounter(MagazineSize, Bullets);
+	//BulletCounterUI->BP_UpdateBulletCounter(MagazineSize, Bullets);
 }

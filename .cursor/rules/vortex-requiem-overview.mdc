@@ -1,0 +1,31 @@
+---
+description: Overview of the Vortex Requiem project, including directory structure and game logic.
+globs:
+alwaysApply: false
+---
+
+# Vortex Requiem Project Overview
+
+Vortex Requiem is a hardcore looter shooter built with Unreal Engine.
+
+## Directory Structure
+
+- **`Source/`**: Contains all C++ source code.
+  - `VortexRequiem/`: The main game module. It is further divided into variants like `Variant_Horror` and `Variant_Shooter` which are left from the FPS template the project was created with for reference with small features to help build a fps game.
+  - `AlePCGModule/`: A module for Procedural Content Generation.
+- **`Content/`**: Contains all game assets, organized by type and feature.
+  - `Content/Blueprints/`: Core gameplay logic in Blueprints.
+  - `Content/Characters/`: Character models, animations, and materials.
+  - `Content/Weapons/`: Weapon assets.
+  - `Content/Variant_Horror/` and `Content/Variant_Shooter/`: Assets specific to each game variant.
+- **`Config/`**: Contains configuration files (`.ini`).
+
+## Game Logic
+
+Game logic is implemented using a mix of C++ and Blueprints.
+- Core systems and performance-critical code are in C++. See [`Source/VortexRequiem`](mdc:Source/VortexRequiem).
+- Higher-level logic, UI, and content-related behaviors are often in Blueprints. See [`Content/Blueprints`](mdc:Content/Blueprints).
+
+## Feature Planning
+
+The feature plan can be found in [`Project Chimera feature plan.docx`](mdc:Project%20Chimera%20feature%20plan.docx).

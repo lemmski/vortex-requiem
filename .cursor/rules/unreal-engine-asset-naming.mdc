@@ -1,0 +1,39 @@
+---
+alwaysApply: false
+description: Guidelines for Unreal Engine asset naming conventions used in this project.
+---
+
+# Unreal Engine Asset Naming Conventions
+
+This project follows standard Unreal Engine asset naming conventions. Use these prefixes when creating or searching for assets.
+
+| Asset Type | Prefix |
+| --- | --- |
+| Blueprint Class | `BP_` |
+| Widget Blueprint | `WBP_` or `UI_` |
+| Material | `M_` |
+| Material Instance | `MI_` |
+| Material Function | `MF_` |
+| Texture | `T_` |
+| Static Mesh | `SM_` |
+| Skeletal Mesh | `SK_` |
+| Animation Blueprint | `ABP_` |
+| Animation Sequence | `AS_` |
+| Level / Map | `Lvl_` |
+| Input Action | `IA_` |
+| Input Mapping Context | `IMC_` |
+| Sound Cue | `SC_` |
+| Sound Wave | `SW_` |
+| Niagara System | `NS_` |
+| Niagara Emitter | `NE_` |
+| Data Table | `DT_` |
+| Physical Material | `PM_` |
+
+When naming textures, it's also common to use a suffix to denote the type of texture, such as:
+- `_D`: Diffuse / Base Color
+- `_N`: Normal
+- `_M`: Metallic
+- `_R`: Roughness
+- `_A`: Alpha / Opacity
+- `_AO`: Ambient Occlusion
+- `_E`: Emissive

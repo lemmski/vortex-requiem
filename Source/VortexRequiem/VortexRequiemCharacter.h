@@ -33,6 +33,14 @@ class AVortexRequiemCharacter : public ACharacter
 
 protected:
 
+	/** Normal field of view. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera")
+	float NormalFOV = 90.f;
+
+	/** Field of view when using binoculars. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Camera")
+	float ZoomedFOV = 15.f;
+
 	/** Jump Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category ="Input")
 	UInputAction* JumpAction;
@@ -48,6 +56,10 @@ protected:
 	/** Mouse Look Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category ="Input")
 	class UInputAction* MouseLookAction;
+
+	/** Binoculars Input Action */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	UInputAction* BinocularsAction;
 	
 public:
 	AVortexRequiemCharacter();
@@ -77,6 +89,12 @@ protected:
 	virtual void DoJumpEnd();
 
 protected:
+
+	/** Toggles binoculars view. */
+	void ToggleBinoculars();
+
+	/** True if we are currently using binoculars. */
+	bool bIsUsingBinoculars;
 
 	/** Set up input action bindings */
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
