@@ -9,6 +9,10 @@
 #include "NavigationSystem.h"
 #include "NavigationSystemTypes.h"
 #include "ProcTerrain.h"
+#include "Blueprint/UserWidget.h"
+#include "Kismet/GameplayStatics.h"
+#include "GameFramework/Character.h"
+#include "Components/CapsuleComponent.h"
 
 ATerrainGen::ATerrainGen()
 {
@@ -34,7 +38,24 @@ ATerrainGen::ATerrainGen()
 
 void ATerrainGen::Regenerate()
 {
+    // If we have a loading widget class, display it full-screen
+    if (LoadingWidgetClass && !ActiveLoadingWidget)
+    {
+        ActiveLoadingWidget = CreateWidget<UUserWidget>(GetWorld(), LoadingWidgetClass);
+        if (ActiveLoadingWidget)
+        {
+            ActiveLoadingWidget->AddToViewport(9999);
+        }
+    }
+
     GenerateTerrain();
+
+    // Remove loading widget when done
+    if (ActiveLoadingWidget)
+    {
+        ActiveLoadingWidget->RemoveFromParent();
+        ActiveLoadingWidget = nullptr;
+    }
 }
 
 void ATerrainGen::OnConstruction(const FTransform& Transform)
@@ -267,4 +288,23 @@ void ATerrainGen::GenerateTerrain()
     double Total = FPlatformTime::Seconds() - OverallStart;
     UE_LOG(LogTemp, Log, TEXT("Timing ms | Mask creation:%6.1f  Vertex fill:%6.1f  Triangle list:%6.1f  GPU upload:%6.1f  Nav-mesh kick:%6.1f  Total:%6.1f"),
         MaskTime*1000, VertTime*1000, TriTime*1000, UploadTime*1000, NavKickTime*1000, Total*1000);
+
+    APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
+    if (PlayerPawn)
+    {
+        float ScaleZ = ZScale / 255.f;
+        int32 PixelX = FMath::RandRange(0, W - 1);
+        int32 PixelY = FMath::RandRange(0, H - 1);
+        float Height = HeightData[PixelY * W + PixelX] * ScaleZ;
+        FVector LocalLocation(PixelX * XYScale, PixelY * XYScale, Height);
+        FVector WorldLocation = GetActorTransform().TransformPosition(LocalLocation);
+        float Safety = 0.1f;
+        float PawnHalfHeight = 0.f;
+        if (ACharacter* Character = Cast<ACharacter>(PlayerPawn))
+        {
+            PawnHalfHeight = Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+        }
+        WorldLocation.Z += PawnHalfHeight + Safety;
+        PlayerPawn->SetActorLocation(WorldLocation);
+    }
 }

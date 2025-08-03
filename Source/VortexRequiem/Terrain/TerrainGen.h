@@ -42,11 +42,18 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     float HeightTolerance;
 
+    // Optional loading widget displayed during terrain rebuild (use a full-screen widget with the desired texture)
+    UPROPERTY(EditAnywhere, Category="Terrain|UI")
+    TSubclassOf<class UUserWidget> LoadingWidgetClass;
+
     virtual void OnConstruction(const FTransform& Transform) override;
 
 private:
     UPROPERTY(VisibleAnywhere)
     UProceduralMeshComponent* Mesh;
+
+    UPROPERTY(Transient)
+    class UUserWidget* ActiveLoadingWidget;
 
     UFUNCTION(CallInEditor, Category="Terrain")
     void Regenerate();
