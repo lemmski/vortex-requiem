@@ -66,6 +66,34 @@ public:
     UPROPERTY(EditAnywhere, Category="Terrain|UI")
     TSubclassOf<class UUserWidget> LoadingWidgetClass;
 
+    // The number of player starts to create
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawning")
+    int32 NumPlayerStarts;
+    
+    // Maximum slope in degrees for a valid spawn point
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawning", meta = (ClampMin = "0.0", ClampMax = "90.0"))
+    float MaxSpawnSlopeInDegrees;
+    
+    // Minimum distance between spawn points
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawning", meta = (ClampMin = "0.0"))
+    float MinSpawnSeparation;
+    
+    // Radius around a potential spawn point to check for obstructions
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawning", meta = (ClampMin = "0.0"))
+    float SpawnClearanceRadius;
+    
+    // The locations of the calculated spawn points
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Spawning")
+    TArray<FVector> SpawnPoints;
+
+    // If true, the debug spheres for spawn points will be drawn larger
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawning")
+    bool bUseLargeSpawnSpheres;
+
+#if WITH_EDITOR
+    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+
     virtual void OnConstruction(const FTransform& Transform) override;
 
 protected:
@@ -79,9 +107,19 @@ private:
     UPROPERTY(Transient)
     class UUserWidget* ActiveLoadingWidget;
 
+    // Timer for polling collision readiness
+    FTimerHandle CollisionReadyTimer;
+
+    // List of actors to re-enable physics on
+    TArray<TWeakObjectPtr<AActor>> ActorsToReenablePhysics;
+
     UFUNCTION(CallInEditor, Category="Terrain")
     void Regenerate();
 
     void GenerateTerrain();
+    void CalculateSpawnPoints();
+    void CheckCollisionReady();
+    void DisableActorPhysicsTemporarily();
+    void RestoreActorPhysics();
     static bool LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int32& OutHeight, TArray<uint8>& OutData);
 };

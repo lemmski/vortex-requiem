@@ -7,12 +7,15 @@ static void FillDowntownRuins(FProcTerrainPresetDefinition& D)
     D.Width = 2049;
     D.Height = 2049;
     D.Seed = 2077;
+    D.DefaultXYScale = 100.f;
+    D.DefaultZScale = 25000.f;
 
     D.Fbm.bUseSimplex = false; // perlin
     D.Fbm.Scale = 600.f;
     D.Fbm.Octaves = 9;
     D.Fbm.Persistence = 0.55f;
     D.Fbm.Lacunarity = 2.1f;
+    D.Fbm.WarpStrength = 10.f;
 
     D.bThermalEnabled = true;
     D.Thermal.Iterations = 4;
@@ -29,12 +32,15 @@ static void FillCrystalline(FProcTerrainPresetDefinition& D)
     D.Width = 4097;
     D.Height = 4097;
     D.Seed = 8008;
+    D.DefaultXYScale = 100.f;
+    D.DefaultZScale = 60000.f;
 
     D.Fbm.bUseSimplex = false; // perlin
     D.Fbm.Scale = 800.f;
     D.Fbm.Octaves = 8;
     D.Fbm.Persistence = 0.7f;
     D.Fbm.Lacunarity = 2.2f;
+    D.RedistributionExp = 3.8f;
 
     D.bThermalEnabled = false;
     D.bHydraulicEnabled = true;
@@ -48,12 +54,15 @@ static void FillMutatedSwamp(FProcTerrainPresetDefinition& D)
     D.Width = 4097;
     D.Height = 4097;
     D.Seed = 65000000;
+    D.DefaultXYScale = 100.f;
+    D.DefaultZScale = 8000.f;
 
     D.Fbm.bUseSimplex = true; // simplex
     D.Fbm.Scale = 1800.f;
     D.Fbm.Octaves = 6;
     D.Fbm.Persistence = 0.35f;
     D.Fbm.Lacunarity = 2.f;
+    D.RedistributionExp = 1.7f;
 
     D.bHydraulicEnabled = true;
     D.Hydraulic.NumDroplets = 1200000;
@@ -66,6 +75,8 @@ static void FillBadlands(FProcTerrainPresetDefinition& D)
     D.Width = 4097;
     D.Height = 4097;
     D.Seed = 1986;
+    D.DefaultXYScale = 100.f;
+    D.DefaultZScale = 40000.f;
 
     D.Fbm.bUseSimplex = false;
     D.Fbm.Scale = 1200.f;
@@ -87,12 +98,16 @@ static void FillOldWorld(FProcTerrainPresetDefinition& D)
     D.Width = 2049;
     D.Height = 2049;
     D.Seed = 1066;
+    D.DefaultXYScale = 100.f;
+    D.DefaultZScale = 15000.f;
 
     D.Fbm.bUseSimplex = true;
     D.Fbm.Scale = 1400.f;
     D.Fbm.Octaves = 8;
     D.Fbm.Persistence = 0.4f;
     D.Fbm.Lacunarity = 2.f;
+    D.Fbm.WarpStrength = 40.f;
+    D.Fbm.WarpScale = 200.f;
 
     D.bThermalEnabled = true;
     D.Thermal.Iterations = 15;
@@ -108,12 +123,15 @@ static void FillGothic(FProcTerrainPresetDefinition& D)
     D.Width = 2049;
     D.Height = 2049;
     D.Seed = 1888;
+    D.DefaultXYScale = 100.f;
+    D.DefaultZScale = 35000.f;
 
     D.Fbm.bUseSimplex = false;
     D.Fbm.Scale = 700.f;
     D.Fbm.Octaves = 9;
     D.Fbm.Persistence = 0.6f;
     D.Fbm.Lacunarity = 2.3f;
+    D.RedistributionExp = 2.2f;
 
     D.bThermalEnabled = true;
     D.Thermal.Iterations = 3;
@@ -125,11 +143,14 @@ static void FillMangrove(FProcTerrainPresetDefinition& D)
     D.Width = 4097;
     D.Height = 4097;
     D.Seed = 1619;
+    D.DefaultXYScale = 100.f;
+    D.DefaultZScale = 6000.f;
 
     D.Fbm.bUseSimplex = true;
     D.Fbm.Scale = 1500.f;
     D.Fbm.Octaves = 5;
     D.Fbm.Persistence = 0.3f;
+    D.RedistributionExp = 1.8f;
 
     D.bThermalEnabled = false;
     D.bHydraulicEnabled = true;
@@ -143,11 +164,15 @@ static void FillProving(FProcTerrainPresetDefinition& D)
     D.Width = 1025;
     D.Height = 1025;
     D.Seed = 2025;
+    D.DefaultXYScale = 100.f;
+    D.DefaultZScale = 10000.f;
 
     D.Fbm.bUseSimplex = true;
     D.Fbm.Scale = 800.f;
     D.Fbm.Octaves = 6;
     D.Fbm.Persistence = 0.45f;
+    D.Fbm.WarpStrength = 15.f;
+    D.Fbm.WarpScale = 100.f;
 
     D.bThermalEnabled = true;
     D.Thermal.Iterations = 5;
@@ -164,11 +189,15 @@ static void FillArena(FProcTerrainPresetDefinition& D)
     D.Width = 513;
     D.Height = 513;
     D.Seed = 1111;
+    D.DefaultXYScale = 50.f;
+    D.DefaultZScale = 2000.f;
 
     D.Fbm.bUseSimplex = true;
     D.Fbm.Scale = 400.f;
     D.Fbm.Octaves = 5;
     D.Fbm.Persistence = 0.5f;
+    D.Fbm.WarpStrength = 10.f;
+    D.Fbm.WarpScale = 80.f;
 
     D.bThermalEnabled = true;
     D.Thermal.Iterations = 3;

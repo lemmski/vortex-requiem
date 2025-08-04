@@ -20,11 +20,14 @@
 
 struct FFBMSettings
 {
-	bool  bUseSimplex   = true;
-	float Scale         = 400.f;
-	int32 Octaves       = 8;
-	float Persistence   = 0.5f;
-	float Lacunarity    = 2.f;
+    bool  bUseSimplex   = true;
+    float Scale         = 400.f;
+    int32 Octaves       = 8;
+    float Persistence   = 0.5f;
+    float Lacunarity    = 2.f;
+    // Domain-warp parameters (0 disables warp)
+    float WarpStrength  = 0.f;   // displacement amplitude in pixel units
+    float WarpScale     = 50.f;  // period of the warp noise (pixels)
 };
 
 struct FThermalSettings
@@ -69,7 +72,18 @@ public:
 		FastNoiseLite Noise;
 		Noise.SetSeed(RNG.RandHelper(INT32_MAX));
 		Noise.SetNoiseType(S.bUseSimplex ? FastNoiseLite::NoiseType_OpenSimplex2
-		                               : FastNoiseLite::NoiseType_Perlin);
+                                   : FastNoiseLite::NoiseType_Perlin);
+
+    // --- Domain warp setup ---
+    FastNoiseLite Warp;
+    const bool bUseWarp = S.WarpStrength > 0.f;
+    if (bUseWarp)
+    {
+        Warp.SetSeed(RNG.RandHelper(INT32_MAX));
+        Warp.SetNoiseType(S.bUseSimplex ? FastNoiseLite::NoiseType_OpenSimplex2
+                                       : FastNoiseLite::NoiseType_Perlin);
+    }
+    const float InvWarpScale = (S.WarpScale > 0.f) ? 1.f / S.WarpScale : 0.f;
 
 		const float InvScale = 1.f / S.Scale;
 		float Amplitude = 1.f;
@@ -82,9 +96,28 @@ public:
 				for (int32 x = 0; x < Width; ++x)
 				{
 					const int32 Idx = y * Width + x;
-					const float Nx = static_cast<float>(x) * Frequency;
-					const float Ny = static_cast<float>(y) * Frequency;
-					HeightMap[Idx] += Noise.GetNoise(Nx, Ny) * Amplitude;
+					float Fx = static_cast<float>(x);
+                float Fy = static_cast<float>(y);
+
+                if (bUseWarp)
+                {
+                    float wx = 0.f, wy = 0.f;
+                    float aWarp = 1.f;
+                    float fWarp = InvWarpScale;
+                    for (int32 wo = 0; wo < 3; ++wo)
+                    {
+                        wx += Warp.GetNoise(Fx * fWarp + 1000.f, Fy * fWarp + 1000.f) * aWarp;
+                        wy += Warp.GetNoise(Fx * fWarp + 2000.f, Fy * fWarp + 2000.f) * aWarp;
+                        aWarp *= 0.5f;
+                        fWarp *= 2.f;
+                    }
+                    Fx += wx * S.WarpStrength;
+                    Fy += wy * S.WarpStrength;
+                }
+
+                const float Nx = Fx * Frequency;
+                const float Ny = Fy * Frequency;
+                HeightMap[Idx] += Noise.GetNoise(Nx, Ny) * Amplitude;
 				}
 			}
 			Amplitude *= S.Persistence;
@@ -186,7 +219,21 @@ public:
 			}
 		}
 		Normalize();
-	}
+    }
+
+    // ----------------------------------------------------------------------
+    // Height redistribution (power curve)
+    // ----------------------------------------------------------------------
+    void ApplyRedistribution(float Exponent)
+    {
+        if (FMath::IsNearlyEqual(Exponent, 1.f))
+            return;
+        for (float& V : HeightMap)
+        {
+            V = FMath::Pow(V, Exponent);
+        }
+        Normalize();
+    }
 
 private:
 	void Normalize()

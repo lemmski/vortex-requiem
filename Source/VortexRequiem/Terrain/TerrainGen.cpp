@@ -15,6 +15,11 @@
 #include "GameFramework/Character.h"
 #include "Components/CapsuleComponent.h"
 #include "TextureResource.h"
+#include "EngineUtils.h"
+#include "TimerManager.h"
+#include "DrawDebugHelpers.h"
+#include "Engine/EngineTypes.h"
+#include "Engine/OverlapResult.h"
 
 namespace
 {
@@ -41,7 +46,7 @@ ATerrainGen::ATerrainGen()
     Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
     Mesh->SetMobility(EComponentMobility::Static);
     Mesh->SetCastShadow(false);
-    Mesh->bUseAsyncCooking = !GetWorld() || GetWorld()->WorldType == EWorldType::Editor;
+    Mesh->bUseAsyncCooking = GetWorld() && GetWorld()->IsEditorWorld();
 
     // Reasonable defaults
     PngPath = TEXT("Content/Levels/OldWorldAnomalyLvl/old_world_anomaly_2k.png");
@@ -52,6 +57,13 @@ ATerrainGen::ATerrainGen()
     HeightTolerance = 5.f;
 
     Preset = ETerrainPreset::None;
+
+    // Spawning defaults
+    NumPlayerStarts = 10;
+    MaxSpawnSlopeInDegrees = 25.0f;
+    MinSpawnSeparation = 1000.0f;
+    SpawnClearanceRadius = 100.0f;
+    bUseLargeSpawnSpheres = false;
 
 #if WITH_EDITORONLY_DATA
     Mesh->bUseComplexAsSimpleCollision = true;
@@ -131,7 +143,7 @@ void ATerrainGen::GenerateTerrain()
         Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
     Mesh->SetMobility(EComponentMobility::Static);
     Mesh->SetCastShadow(false);
-        Mesh->bUseAsyncCooking = !GetWorld() || GetWorld()->WorldType == EWorldType::Editor;
+        Mesh->bUseAsyncCooking = GetWorld() && GetWorld()->IsEditorWorld();
     }
 
     int32 W = 0, H = 0; TArray<uint8> HeightData;
@@ -155,6 +167,7 @@ void ATerrainGen::GenerateTerrain()
     if (GTerrainCache.bValid && GTerrainCache.Key == CacheKey && Mesh)
     {
         Mesh->CreateMeshSection_LinearColor(0, GTerrainCache.Vertices, GTerrainCache.Triangles, {}, GTerrainCache.UVs, {}, {}, true);
+        CalculateSpawnPoints();
         return;
     }
 
@@ -392,15 +405,14 @@ void ATerrainGen::GenerateTerrain()
     UE_LOG(LogTemp, Log, TEXT("Timing ms | Mask creation:%6.1f  Vertex fill:%6.1f  Triangle list:%6.1f  GPU upload:%6.1f  Nav-mesh kick:%6.1f  Total:%6.1f"),
         MaskTime*1000, VertTime*1000, TriTime*1000, UploadTime*1000, NavKickTime*1000, Total*1000);
 
+    CalculateSpawnPoints();
+
     APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
-    if (PlayerPawn)
+    if (PlayerPawn && SpawnPoints.Num() > 0)
     {
-        float ScaleZ = ZScale / 255.f;
-        int32 PixelX = FMath::RandRange(0, W - 1);
-        int32 PixelY = FMath::RandRange(0, H - 1);
-        float Height = HeightData[PixelY * W + PixelX] * ScaleZ;
-        FVector LocalLocation(PixelX * XYScale, PixelY * XYScale, Height);
-        FVector WorldLocation = GetActorTransform().TransformPosition(LocalLocation);
+        int32 SpawnIndex = FMath::RandRange(0, SpawnPoints.Num() - 1);
+        FVector WorldLocation = SpawnPoints[SpawnIndex];
+
         float Safety = 0.1f;
         float PawnHalfHeight = 0.f;
         if (ACharacter* Character = Cast<ACharacter>(PlayerPawn))
@@ -410,4 +422,185 @@ void ATerrainGen::GenerateTerrain()
         WorldLocation.Z += PawnHalfHeight + Safety;
         PlayerPawn->SetActorLocation(WorldLocation);
     }
+
+    if (Mesh->bUseAsyncCooking)
+    {
+        DisableActorPhysicsTemporarily();
+        GetWorldTimerManager().SetTimer(CollisionReadyTimer, this, &ATerrainGen::CheckCollisionReady, 0.1f, true);
+    }
 }
+
+void ATerrainGen::CalculateSpawnPoints()
+{
+    SpawnPoints.Empty();
+    if (NumPlayerStarts <= 0 || !Mesh)
+    {
+        return;
+    }
+
+    const FProcMeshSection* Section = Mesh->GetProcMeshSection(0);
+    if (!Section || Section->ProcIndexBuffer.Num() == 0)
+    {
+        return;
+    }
+
+    const float MaxSlopeCosine = FMath::Cos(FMath::DegreesToRadians(MaxSpawnSlopeInDegrees));
+    const FTransform ActorToWorld = GetActorTransform();
+
+    TArray<FVector> CandidateLocations;
+
+    for (int32 i = 0; i < Section->ProcIndexBuffer.Num(); i += 3)
+    {
+        FVector V0 = Section->ProcVertexBuffer[Section->ProcIndexBuffer[i]].Position;
+        FVector V1 = Section->ProcVertexBuffer[Section->ProcIndexBuffer[i + 1]].Position;
+        FVector V2 = Section->ProcVertexBuffer[Section->ProcIndexBuffer[i + 2]].Position;
+
+        // Calculate the normal in local space
+        FVector LocalNormal = FVector::CrossProduct(V2 - V0, V1 - V0).GetSafeNormal();
+
+        // Transform the normal to world space
+        FVector WorldNormal = ActorToWorld.TransformVectorNoScale(LocalNormal);
+        WorldNormal.Normalize();
+
+        // Ensure the normal is pointing upwards
+        if (WorldNormal.Z < 0)
+        {
+            WorldNormal = -WorldNormal;
+        }
+
+        // Check if the surface is flat enough
+        if (WorldNormal.Z >= MaxSlopeCosine)
+        {
+            CandidateLocations.Add((V0 + V1 + V2) / 3.0f);
+        }
+    }
+
+    if (CandidateLocations.Num() == 0)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("No suitable flat areas found for spawning."));
+        return;
+    }
+
+    // Shuffle candidates to get random distribution
+    for (int32 i = 0; i < CandidateLocations.Num(); ++i)
+    {
+        int32 j = FMath::RandRange(i, CandidateLocations.Num() - 1);
+        CandidateLocations.Swap(i, j);
+    }
+
+    UWorld* World = GetWorld();
+    if (!World) return;
+
+    for (const FVector& LocalCandidate : CandidateLocations)
+    {
+        if (SpawnPoints.Num() >= NumPlayerStarts)
+        {
+            break;
+        }
+
+        FVector WorldCandidate = ActorToWorld.TransformPosition(LocalCandidate);
+
+        bool bTooClose = false;
+        for (const FVector& ExistingSpawn : SpawnPoints)
+        {
+            if (FVector::DistSquared(WorldCandidate, ExistingSpawn) < FMath::Square(MinSpawnSeparation))
+            {
+                bTooClose = true;
+                break;
+            }
+        }
+
+        if (!bTooClose)
+        {
+            SpawnPoints.Add(WorldCandidate);
+        }
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("Found %d spawn points."), SpawnPoints.Num());
+
+#if WITH_EDITOR
+    FlushPersistentDebugLines(GetWorld());
+    const float DebugSphereRadius = bUseLargeSpawnSpheres ? SpawnClearanceRadius * 5.0f : SpawnClearanceRadius;
+    for (const FVector& SpawnPoint : SpawnPoints)
+    {
+        DrawDebugSphere(GetWorld(), SpawnPoint, DebugSphereRadius, 12, FColor::Green, true, -1, 0, 5.f);
+    }
+#endif
+}
+
+void ATerrainGen::CheckCollisionReady()
+{
+    if (Mesh && Mesh->GetBodySetup() && Mesh->GetBodySetup()->bHasCookedCollisionData)
+    {
+        // Body setup is complete, collision is ready
+        GetWorldTimerManager().ClearTimer(CollisionReadyTimer);
+        RestoreActorPhysics();
+        UE_LOG(LogTemp, Log, TEXT("ATerrainGen: Collision is ready, re-enabling actor physics"));
+    }
+}
+
+void ATerrainGen::DisableActorPhysicsTemporarily()
+{
+    if (!GetWorld()) return;
+
+    ActorsToReenablePhysics.Empty();
+    for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+    {
+        AActor* Actor = *It;
+        if (Actor && Actor != this)
+        {
+            TArray<UPrimitiveComponent*> PrimitiveComponents;
+            Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+            bool bHadPhysics = false;
+            for (UPrimitiveComponent* PrimComp : PrimitiveComponents)
+            {
+                if (PrimComp && PrimComp->IsSimulatingPhysics())
+                {
+                    PrimComp->SetSimulatePhysics(false);
+                    bHadPhysics = true;
+                }
+            }
+            if (bHadPhysics)
+            {
+                ActorsToReenablePhysics.Add(Actor);
+            }
+        }
+    }
+}
+
+void ATerrainGen::RestoreActorPhysics()
+{
+    for (const auto& WeakActor : ActorsToReenablePhysics)
+    {
+        if (AActor* Actor = WeakActor.Get())
+        {
+            TArray<UPrimitiveComponent*> PrimitiveComponents;
+            Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+            for (UPrimitiveComponent* PrimComp : PrimitiveComponents)
+            {
+                if (PrimComp)
+                {
+                    PrimComp->SetSimulatePhysics(true);
+                }
+            }
+        }
+    }
+    ActorsToReenablePhysics.Empty();
+}
+
+#if WITH_EDITOR
+void ATerrainGen::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+    Super::PostEditChangeProperty(PropertyChangedEvent);
+
+    if (PropertyChangedEvent.Property && PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(ATerrainGen, Preset))
+    {
+        FProcTerrainPresetDefinition Def;
+        if (ProcTerrainPresets::GetPreset(Preset, Def))
+        {
+            XYScale = Def.DefaultXYScale;
+            ZScale = Def.DefaultZScale;
+        }
+    }
+}
+#endif
