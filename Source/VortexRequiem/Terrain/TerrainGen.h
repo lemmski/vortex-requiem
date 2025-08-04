@@ -4,6 +4,22 @@
 #include "GameFramework/Actor.h"
 #include "ProceduralMeshComponent.h"
 #include "Engine/Texture2D.h"
+#include "ProcTerrain.h"
+
+UENUM(BlueprintType)
+enum class ETerrainPreset : uint8
+{
+    None                     UMETA(DisplayName="None"),
+    DowntownRuins            UMETA(DisplayName="Downtown Ruins"),
+    CrystallineBloomfallZone UMETA(DisplayName="Crystalline Bloomfall Zone"),
+    MutatedSwamplands        UMETA(DisplayName="Mutated Swamplands"),
+    IrradiatedBadlands       UMETA(DisplayName="Irradiated Badlands"),
+    OldWorldAnomaly          UMETA(DisplayName="Old World Anomaly"),
+    GothicCathedralApproach  UMETA(DisplayName="Gothic Cathedral Approach"),
+    MangroveDeltaFull        UMETA(DisplayName="Mangrove Delta Full"),
+    ProvingGroundsSmall      UMETA(DisplayName="Proving Grounds Small"),
+    ArenaTiny513             UMETA(DisplayName="Arena Tiny 513")
+};
 #include "TerrainGen.generated.h"
 
 /**
@@ -25,6 +41,10 @@ public:
     // Alternatively reference a texture asset directly
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     UTexture2D* HeightmapTexture;
+
+    // Selected procedural terrain preset (ignored if PngPath/HeightmapTexture provided)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
+    ETerrainPreset Preset;
 
     // XY size of a single pixel (world units)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
@@ -48,8 +68,12 @@ public:
 
     virtual void OnConstruction(const FTransform& Transform) override;
 
+protected:
+    virtual void BeginPlay() override;
+
 private:
-    UPROPERTY(VisibleAnywhere)
+    // Procedural mesh should never be serialized to disk – it is rebuilt on demand
+    UPROPERTY(VisibleAnywhere, Transient)
     UProceduralMeshComponent* Mesh;
 
     UPROPERTY(Transient)

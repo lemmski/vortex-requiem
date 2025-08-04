@@ -9,19 +9,39 @@
 #include "NavigationSystem.h"
 #include "NavigationSystemTypes.h"
 #include "ProcTerrain.h"
+#include "ProcTerrainPreset.h"
 #include "Blueprint/UserWidget.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Character.h"
 #include "Components/CapsuleComponent.h"
+#include "TextureResource.h"
+
+namespace
+{
+    struct FProcMeshCache
+    {
+        TArray<FVector> Vertices;
+        TArray<int32> Triangles;
+        TArray<FVector2D> UVs;
+        bool bValid = false;
+        FString Key;
+    };
+    static FProcMeshCache GTerrainCache;
+}
 
 ATerrainGen::ATerrainGen()
 {
     PrimaryActorTick.bCanEverTick = false;
 
     Mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("ProcMesh"));
+    // Prevent huge mesh data from being recorded in the editor undo/redo buffer and from being duplicated into PIE
+    Mesh->ClearFlags(RF_Transactional);
+    Mesh->SetFlags(RF_Transient | RF_DuplicateTransient);
     SetRootComponent(Mesh);
     Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
-    Mesh->bUseAsyncCooking = true;
+    Mesh->SetMobility(EComponentMobility::Static);
+    Mesh->SetCastShadow(false);
+    Mesh->bUseAsyncCooking = !GetWorld() || GetWorld()->WorldType == EWorldType::Editor;
 
     // Reasonable defaults
     PngPath = TEXT("Content/Levels/OldWorldAnomalyLvl/old_world_anomaly_2k.png");
@@ -30,6 +50,8 @@ ATerrainGen::ATerrainGen()
     ZScale  = 10.f;
     TileQuads = 127;
     HeightTolerance = 5.f;
+
+    Preset = ETerrainPreset::None;
 
 #if WITH_EDITORONLY_DATA
     Mesh->bUseComplexAsSimpleCollision = true;
@@ -64,6 +86,15 @@ void ATerrainGen::OnConstruction(const FTransform& Transform)
     GenerateTerrain();
 }
 
+void ATerrainGen::BeginPlay()
+{
+    Super::BeginPlay();
+    if (!Mesh || Mesh->GetNumSections() == 0)
+    {
+        GenerateTerrain();
+    }
+}
+
 bool ATerrainGen::LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int32& OutHeight, TArray<uint8>& OutData)
 {
     TArray<uint8> FileData;
@@ -89,12 +120,70 @@ bool ATerrainGen::LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int
 
 void ATerrainGen::GenerateTerrain()
 {
+    // Ensure we have a valid procedural mesh component (it may be null in duplicated PIE worlds)
+    if (!Mesh)
+    {
+        Mesh = NewObject<UProceduralMeshComponent>(this, TEXT("ProcMeshPIE"));
+        Mesh->RegisterComponent();
+        SetRootComponent(Mesh);
+        Mesh->ClearFlags(RF_Transactional);
+        Mesh->SetFlags(RF_Transient | RF_DuplicateTransient);
+        Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+    Mesh->SetMobility(EComponentMobility::Static);
+    Mesh->SetCastShadow(false);
+        Mesh->bUseAsyncCooking = !GetWorld() || GetWorld()->WorldType == EWorldType::Editor;
+    }
+
     int32 W = 0, H = 0; TArray<uint8> HeightData;
+
+    // Build cache key from current settings
+    FString CacheKey;
+    if (HeightmapTexture)
+    {
+        CacheKey = FString::Printf(TEXT("Tex:%s_%f_%f_%f"), *HeightmapTexture->GetPathName(), XYScale, ZScale, HeightTolerance);
+    }
+    else if (Preset != ETerrainPreset::None)
+    {
+        CacheKey = FString::Printf(TEXT("Preset:%d_%f_%f_%f"), static_cast<int32>(Preset), XYScale, ZScale, HeightTolerance);
+    }
+    else
+    {
+        CacheKey = FString::Printf(TEXT("File:%s_%f_%f_%f"), *PngPath, XYScale, ZScale, HeightTolerance);
+    }
+
+    // If we have a cached mesh for this key, reuse it
+    if (GTerrainCache.bValid && GTerrainCache.Key == CacheKey && Mesh)
+    {
+        Mesh->CreateMeshSection_LinearColor(0, GTerrainCache.Vertices, GTerrainCache.Triangles, {}, GTerrainCache.UVs, {}, {}, true);
+        return;
+    }
 
     bool bLoaded = false;
 
-    // 1) Load from texture asset if provided
-    if (HeightmapTexture)
+    // 0) Generate procedurally from preset if selected
+    if (Preset != ETerrainPreset::None)
+    {
+        FProcTerrainPresetDefinition Def;
+        if (ProcTerrainPresets::GetPreset(Preset, Def))
+        {
+            W = Def.Width;
+            H = Def.Height;
+            FProcTerrain PT(W, H, Def.Seed);
+            PT.GenerateFBM(Def.Fbm);
+            if (Def.bThermalEnabled)  PT.ApplyThermal(Def.Thermal);
+            if (Def.bHydraulicEnabled) PT.ApplyHydraulic(Def.Hydraulic);
+
+            HeightData.SetNumUninitialized(W * H);
+            for (int32 i = 0; i < W * H; ++i)
+            {
+                HeightData[i] = static_cast<uint8>(FMath::Clamp(PT.HeightMap[i] * 255.0f, 0.0f, 255.0f));
+            }
+            bLoaded = true;
+        }
+    }
+
+    // 1) Load from texture asset if provided (only if preset did not already generate)
+    if (!bLoaded && HeightmapTexture)
     {
         if (HeightmapTexture->GetPlatformData() && HeightmapTexture->GetPlatformData()->Mips.Num() > 0)
         {
@@ -112,7 +201,7 @@ void ATerrainGen::GenerateTerrain()
             bLoaded = true;
         }
     }
-    else // 2) load from PNG file path
+    else if (!bLoaded) // 2) load from PNG file path
     {
         FString FullPath = PngPath;
         if (FPaths::IsRelative(PngPath))
@@ -198,7 +287,14 @@ void ATerrainGen::GenerateTerrain()
 
         double UploadStart = FPlatformTime::Seconds();
         Mesh->CreateMeshSection_LinearColor(0, Verts, Tris, {}, UVs, {}, {}, true);
-        Mesh->SetCanEverAffectNavigation(true);
+        // cache for reuse in PIE/editor duplication
+        GTerrainCache.Vertices = Verts;
+        GTerrainCache.Triangles = Tris;
+        GTerrainCache.UVs = UVs;
+        GTerrainCache.Key = CacheKey;
+        GTerrainCache.bValid = true;
+        // Disable navmesh generation for this heavy terrain mesh to avoid Recast cache overflow
+    Mesh->SetCanEverAffectNavigation(false);
         UploadTime = FPlatformTime::Seconds() - UploadStart;
 
     }
@@ -271,7 +367,14 @@ void ATerrainGen::GenerateTerrain()
         }
         double BuildStart = FPlatformTime::Seconds();
         Mesh->CreateMeshSection_LinearColor(0, Verts, Tris, {}, UVs, {}, {}, true);
-        Mesh->SetCanEverAffectNavigation(true);
+        // cache for reuse in PIE/editor duplication
+        GTerrainCache.Vertices = Verts;
+        GTerrainCache.Triangles = Tris;
+        GTerrainCache.UVs = UVs;
+        GTerrainCache.Key = CacheKey;
+        GTerrainCache.bValid = true;
+        // Disable navmesh generation for this heavy terrain mesh to avoid Recast cache overflow
+    Mesh->SetCanEverAffectNavigation(false);
         double BuildDone = FPlatformTime::Seconds();
         UploadTime = BuildDone - BuildStart;
         UE_LOG(LogTemp, Log, TEXT("ATerrainGen: geometry upload = %.2f s"), UploadTime);
