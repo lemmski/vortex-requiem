@@ -92,7 +92,7 @@ void UMainMenuWidget::StartGameWithPreset(ETerrainPreset Preset)
 
     if (LoadingScreenText)
     {
-        LoadingScreenText->SetText(FText::FromString(TEXT("Generating level...")));
+        LoadingScreenText->SetText(FText::FromString(TEXT("Initiating...")));
     }
 
     if (MainWidgetSwitcher && LoadingScreen)
@@ -105,12 +105,6 @@ void UMainMenuWidget::StartGameWithPreset(ETerrainPreset Preset)
 
 void UMainMenuWidget::DelayedStartGeneration()
 {
-    // Fade out music
-    if (AudioComponent)
-    {
-        AudioComponent->FadeOut(5.0f, 0.0f);
-    }
-
     // Find the TerrainGen actor in the world
     ATerrainGen* TerrainActor = nullptr;
     for (TActorIterator<ATerrainGen> It(GetWorld()); It; ++It)
@@ -121,7 +115,43 @@ void UMainMenuWidget::DelayedStartGeneration()
 
     if (TerrainActor)
     {
+        TerrainActor->OnGenerationProgress.AddDynamic(this, &UMainMenuWidget::HandleGenerationProgress);
+        TerrainActor->OnGenerationComplete.AddDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
         TerrainActor->GenerateTerrainFromPreset(PresetToGenerate);
+    }
+    else
+    {
+        HandleGenerationComplete(); // Can't find actor, just close the menu
+    }
+}
+
+void UMainMenuWidget::HandleGenerationProgress(const FText& ProgressText)
+{
+    if (LoadingScreenText)
+    {
+        LoadingScreenText->SetText(ProgressText);
+    }
+}
+
+void UMainMenuWidget::HandleGenerationComplete()
+{
+    // Fade out music
+    if (AudioComponent)
+    {
+        AudioComponent->FadeOut(1.0f, 0.0f);
+    }
+
+    // Unbind from the delegates
+    ATerrainGen* TerrainActor = nullptr;
+    for (TActorIterator<ATerrainGen> It(GetWorld()); It; ++It)
+    {
+        TerrainActor = *It;
+        break;
+    }
+    if (TerrainActor)
+    {
+        TerrainActor->OnGenerationProgress.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationProgress);
+        TerrainActor->OnGenerationComplete.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
     }
 
     // Hide the menu and return control to the player

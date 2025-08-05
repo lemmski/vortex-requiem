@@ -4,7 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
-#include "Terrain/TerrainGen.h" // For ETerrainPreset
+#include "Terrain/TerrainTypes.h" // For ETerrainPreset
 #include "MainMenuWidget.generated.h"
 
 class UButton;
@@ -37,6 +37,12 @@ protected:
 
     UFUNCTION(BlueprintCallable, Category = "UI")
     void PopulateBiomeButtons();
+
+    UFUNCTION()
+    void HandleGenerationProgress(const FText& ProgressText);
+
+    UFUNCTION()
+    void HandleGenerationComplete();
 
     UPROPERTY(meta = (BindWidget))
     UWidgetSwitcher* MainWidgetSwitcher;

@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "ProcTerrain.h"
-#include "TerrainGen.h" // for ETerrainPreset
+#include "TerrainTypes.h" // for ETerrainPreset
 
 struct FProcTerrainPresetDefinition
 {
