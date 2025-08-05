@@ -14,6 +14,7 @@
 #include "Terrain/TerrainGen.h"
 #include "Components/AudioComponent.h"
 #include "Sound/SoundBase.h"
+#include "TimerManager.h"
 
 void UMainMenuWidget::NativeConstruct()
 {
@@ -87,6 +88,23 @@ void UMainMenuWidget::ShowMainMenuScreen()
 
 void UMainMenuWidget::StartGameWithPreset(ETerrainPreset Preset)
 {
+    PresetToGenerate = Preset;
+
+    if (LoadingScreenText)
+    {
+        LoadingScreenText->SetText(FText::FromString(TEXT("Generating level...")));
+    }
+
+    if (MainWidgetSwitcher && LoadingScreen)
+    {
+        MainWidgetSwitcher->SetActiveWidget(LoadingScreen);
+    }
+    
+    GetWorld()->GetTimerManager().SetTimer(GenerationTimerHandle, this, &UMainMenuWidget::DelayedStartGeneration, 0.1f, false);
+}
+
+void UMainMenuWidget::DelayedStartGeneration()
+{
     // Fade out music
     if (AudioComponent)
     {
@@ -103,7 +121,7 @@ void UMainMenuWidget::StartGameWithPreset(ETerrainPreset Preset)
 
     if (TerrainActor)
     {
-        TerrainActor->GenerateTerrainFromPreset(Preset);
+        TerrainActor->GenerateTerrainFromPreset(PresetToGenerate);
     }
 
     // Hide the menu and return control to the player

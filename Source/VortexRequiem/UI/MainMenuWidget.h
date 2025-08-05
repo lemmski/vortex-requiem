@@ -13,6 +13,7 @@ class UPanelWidget;
 class UBiomeButtonWidget;
 class UAudioComponent;
 class USoundBase;
+class UTextBlock;
 
 UCLASS()
 class VORTEXREQUIEM_API UMainMenuWidget : public UUserWidget
@@ -31,6 +32,9 @@ public:
 protected:
     virtual void NativeConstruct() override;
     
+    UFUNCTION()
+    void DelayedStartGeneration();
+
     UFUNCTION(BlueprintCallable, Category = "UI")
     void PopulateBiomeButtons();
 
@@ -42,6 +46,12 @@ protected:
 
     UPROPERTY(meta = (BindWidget))
     UWidget* BiomeSelectionScreen;
+    
+    UPROPERTY(meta = (BindWidget))
+    UWidget* LoadingScreen;
+
+    UPROPERTY(meta = (BindWidget))
+    UTextBlock* LoadingScreenText;
 
     UPROPERTY(meta = (BindWidget))
     UButton* SinglePlayerButton;
@@ -61,4 +71,7 @@ protected:
 private:
     UPROPERTY()
     UAudioComponent* AudioComponent;
+    
+    ETerrainPreset PresetToGenerate;
+    FTimerHandle GenerationTimerHandle;
 };
