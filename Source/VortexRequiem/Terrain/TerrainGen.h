@@ -22,10 +22,6 @@ enum class ETerrainPreset : uint8
 };
 #include "TerrainGen.generated.h"
 
-/**
- * Runtime height-map terrain generated from a grayscale PNG.
- * Drop the actor in the level, set PngPath and scales and it will build a collision-enabled mesh.
- */
 UCLASS()
 class VORTEXREQUIEM_API ATerrainGen : public AActor
 {
@@ -33,6 +29,13 @@ class VORTEXREQUIEM_API ATerrainGen : public AActor
 
 public:
     ATerrainGen();
+
+    // Regenerate the terrain with the specified preset
+    UFUNCTION(BlueprintCallable, Category="Terrain")
+    void GenerateTerrainFromPreset(ETerrainPreset NewPreset);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
+    bool bGenerateOnBeginPlay;
 
     // Path to the grayscale height-map (absolute or relative to project root)
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")

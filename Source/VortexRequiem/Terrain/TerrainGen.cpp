@@ -1,4 +1,5 @@
 #include "TerrainGen.h"
+#include "VortexRequiemGameInstance.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 #include "Misc/FileHelper.h"
@@ -57,6 +58,7 @@ ATerrainGen::ATerrainGen()
     HeightTolerance = 5.f;
 
     Preset = ETerrainPreset::None;
+    bGenerateOnBeginPlay = false;
 
     // Spawning defaults
     NumPlayerStarts = 10;
@@ -68,6 +70,12 @@ ATerrainGen::ATerrainGen()
 #if WITH_EDITORONLY_DATA
     Mesh->bUseComplexAsSimpleCollision = true;
 #endif
+}
+
+void ATerrainGen::GenerateTerrainFromPreset(ETerrainPreset NewPreset)
+{
+    Preset = NewPreset;
+    Regenerate();
 }
 
 void ATerrainGen::Regenerate()
@@ -101,7 +109,8 @@ void ATerrainGen::OnConstruction(const FTransform& Transform)
 void ATerrainGen::BeginPlay()
 {
     Super::BeginPlay();
-    if (!Mesh || Mesh->GetNumSections() == 0)
+
+    if (bGenerateOnBeginPlay)
     {
         GenerateTerrain();
     }
