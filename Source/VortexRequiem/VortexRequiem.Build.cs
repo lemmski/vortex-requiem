@@ -23,7 +23,9 @@ public class VortexRequiem : ModuleRules
 			"ImageWrapper",
 			"RenderCore",
 			"RHI",
-			"NavigationSystem"
+			"NavigationSystem",
+			"MeshDescription",
+			"StaticMeshDescription"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });

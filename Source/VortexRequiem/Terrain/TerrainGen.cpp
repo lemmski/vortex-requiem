@@ -1,4 +1,7 @@
 #include "TerrainGen.h"
+#include "StaticMeshDescription.h"
+#include "MeshDescription.h"
+#include "UObject/ConstructorHelpers.h"
 #include "VortexRequiemGameInstance.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
@@ -39,14 +42,20 @@ ATerrainGen::ATerrainGen()
 {
     PrimaryActorTick.bCanEverTick = false;
 
-    Mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("ProcMesh"));
+    Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ProcMesh"));
     Mesh->ClearFlags(RF_Transactional);
     Mesh->SetFlags(RF_Transient | RF_DuplicateTransient);
     SetRootComponent(Mesh);
     Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
     Mesh->SetMobility(EComponentMobility::Static);
     Mesh->SetCastShadow(false);
-    Mesh->bUseAsyncCooking = false;
+
+    static ConstructorHelpers::FObjectFinder<UMaterialInterface> DefaultMaterial(TEXT("Material'/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial'"));
+    if (DefaultMaterial.Succeeded())
+    {
+        TerrainMaterial = DefaultMaterial.Object;
+        Mesh->SetMaterial(0, TerrainMaterial);
+    }
 
     PngPath = TEXT("Content/Levels/OldWorldAnomalyLvl/old_world_anomaly_2k.png");
     HeightmapTexture = nullptr;
@@ -65,10 +74,6 @@ ATerrainGen::ATerrainGen()
     bUseLargeSpawnSpheres = false;
     
     CurrentState = EGenerationState::Idle;
-
-#if WITH_EDITORONLY_DATA
-    Mesh->bUseComplexAsSimpleCollision = true;
-#endif
 }
 
 void ATerrainGen::GenerateTerrainFromPreset(ETerrainPreset NewPreset)
@@ -120,7 +125,7 @@ void ATerrainGen::StartAsyncGeneration()
 
     if (!Mesh)
     {
-        Mesh = NewObject<UProceduralMeshComponent>(this, TEXT("ProcMeshPIE"));
+        Mesh = NewObject<UStaticMeshComponent>(this, TEXT("ProcMeshPIE"));
         Mesh->RegisterComponent();
         SetRootComponent(Mesh);
         Mesh->ClearFlags(RF_Transactional);
@@ -128,8 +133,9 @@ void ATerrainGen::StartAsyncGeneration()
         Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
         Mesh->SetMobility(EComponentMobility::Static);
         Mesh->SetCastShadow(false);
-        Mesh->bUseAsyncCooking = true;
     }
+    
+    DisableActorPhysicsTemporarily();
     
     // Build cache key
     if (HeightmapTexture)
@@ -176,6 +182,9 @@ void ATerrainGen::ProcessGenerationStep()
         break;
     case EGenerationState::UploadMesh:
         Step_UploadMesh();
+        break;
+    case EGenerationState::WaitForCollision:
+        Step_WaitForCollision();
         break;
     case EGenerationState::CalculateSpawnPoints:
         Step_CalculateSpawnPoints();
@@ -394,8 +403,53 @@ void ATerrainGen::Step_UploadMesh()
 {
     OnGenerationProgress.Broadcast(FText::FromString("Uploading mesh to GPU..."));
 
-    Mesh->ClearAllMeshSections();
-    Mesh->CreateMeshSection_LinearColor(0, Vertices, Triangles, {}, UVs, {}, {}, true);
+    GeneratedMesh = NewObject<UStaticMesh>(this, TEXT("GeneratedTerrainMesh"));
+    GeneratedMesh->InitResources();
+    GeneratedMesh->bAllowCPUAccess = true;
+    GeneratedMesh->SetLightingGuid();
+
+    UStaticMeshDescription* Desc = GeneratedMesh->CreateStaticMeshDescription();
+    
+    TArray<FVertexInstanceID> VertexInstanceIDs;
+    VertexInstanceIDs.SetNum(Vertices.Num());
+
+    for(int32 i = 0; i < Vertices.Num(); ++i)
+    {
+        FVertexID VertexID = Desc->CreateVertex();
+        Desc->SetVertexPosition(VertexID, Vertices[i]);
+        FVertexInstanceID VI = Desc->CreateVertexInstance(VertexID);
+        Desc->SetVertexInstanceUV(VI, UVs[i]);
+        VertexInstanceIDs[i] = VI;
+    }
+    
+    FPolygonGroupID PolygonGroup = Desc->CreatePolygonGroup();
+    for (int32 i = 0; i < Triangles.Num(); i += 3)
+    {
+        FVertexInstanceID V0 = VertexInstanceIDs[Triangles[i]];
+        FVertexInstanceID V1 = VertexInstanceIDs[Triangles[i+1]];
+        FVertexInstanceID V2 = VertexInstanceIDs[Triangles[i+2]];
+        TArray<FEdgeID> NewEdges;
+        Desc->CreateTriangle(PolygonGroup, {V0, V1, V2}, NewEdges);
+    }
+    
+
+    
+    GeneratedMesh->BuildFromStaticMeshDescriptions({Desc});
+    GeneratedMesh->PostEditChange();
+
+    if (GeneratedMesh->GetBodySetup())
+    {
+        GeneratedMesh->GetBodySetup()->CollisionTraceFlag = CTF_UseComplexAsSimple;
+    }
+
+    if (TerrainMaterial)
+    {
+        GeneratedMesh->GetStaticMaterials().Add(FStaticMaterial(TerrainMaterial, FName("TerrainMaterial")));
+    }
+
+    Mesh->SetMobility(EComponentMobility::Movable);
+    Mesh->SetStaticMesh(GeneratedMesh);
+    Mesh->SetMobility(EComponentMobility::Static);
     
     // Cache the generated mesh
     GTerrainCache.Vertices = Vertices;
@@ -403,10 +457,19 @@ void ATerrainGen::Step_UploadMesh()
     GTerrainCache.UVs = UVs;
     GTerrainCache.Key = CurrentCacheKey;
     GTerrainCache.bValid = true;
-
     Mesh->SetCanEverAffectNavigation(false); // Disable for now
     
-    CurrentState = EGenerationState::CalculateSpawnPoints;
+    CurrentState = EGenerationState::WaitForCollision;
+}
+
+void ATerrainGen::Step_WaitForCollision()
+{
+    OnGenerationProgress.Broadcast(FText::FromString("Waiting for collision..."));
+
+    if (GeneratedMesh && GeneratedMesh->GetBodySetup() && GeneratedMesh->GetBodySetup()->bHasCookedCollisionData)
+    {
+        CurrentState = EGenerationState::CalculateSpawnPoints;
+    }
 }
 
 void ATerrainGen::Step_CalculateSpawnPoints()
@@ -451,10 +514,9 @@ void ATerrainGen::Step_Finalize()
         PlayerPawn->SetActorLocation(WorldLocation);
     }
 
-    if (Mesh->bUseAsyncCooking)
+    if (Mesh->GetStaticMesh())
     {
-        DisableActorPhysicsTemporarily();
-        GetWorldTimerManager().SetTimer(CollisionReadyTimer, this, &ATerrainGen::CheckCollisionReady, 0.1f, true);
+        RestoreActorPhysics();
     }
 
     OnGenerationComplete.Broadcast();
@@ -488,28 +550,35 @@ bool ATerrainGen::LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int
 void ATerrainGen::CalculateSpawnPoints()
 {
     SpawnPoints.Empty();
-    if (NumPlayerStarts <= 0 || !Mesh) return;
+    if (NumPlayerStarts <= 0 || !GeneratedMesh) return;
 
-    const FProcMeshSection* Section = Mesh->GetProcMeshSection(0);
-    if (!Section || Section->ProcIndexBuffer.Num() == 0) return;
+    UStaticMeshDescription* Desc = GeneratedMesh->GetStaticMeshDescription(0);
+    if (!Desc) return;
 
     const float MaxSlopeCosine = FMath::Cos(FMath::DegreesToRadians(MaxSpawnSlopeInDegrees));
-    const FTransform ActorToWorld = GetActorTransform();
+    const FTransform ComponentToWorld = Mesh->GetComponentTransform();
 
     TArray<FVector> CandidateLocations;
-    for (int32 i = 0; i < Section->ProcIndexBuffer.Num(); i += 3)
+    for (const FPolygonID PolygonID : Desc->Polygons().GetElementIDs())
     {
-        FVector V0 = Section->ProcVertexBuffer[Section->ProcIndexBuffer[i]].Position;
-        FVector V1 = Section->ProcVertexBuffer[Section->ProcIndexBuffer[i + 1]].Position;
-        FVector V2 = Section->ProcVertexBuffer[Section->ProcIndexBuffer[i + 2]].Position;
-
-        FVector LocalNormal = FVector::CrossProduct(V2 - V0, V1 - V0).GetSafeNormal();
-        FVector WorldNormal = ActorToWorld.TransformVectorNoScale(LocalNormal).GetSafeNormal();
-        if (WorldNormal.Z < 0) WorldNormal = -WorldNormal;
-
-        if (WorldNormal.Z >= MaxSlopeCosine)
+        TArray<FTriangleID> PolygonTriangles;
+        Desc->GetPolygonTriangles(PolygonID, PolygonTriangles);
+        for (const FTriangleID& TriID : PolygonTriangles)
         {
-            CandidateLocations.Add((V0 + V1 + V2) / 3.0f);
+            TArray<FVertexInstanceID> VertexInstances;
+            Desc->GetTriangleVertexInstances(TriID, VertexInstances);
+            FVector V0 = Desc->GetVertexPosition(Desc->GetVertexInstanceVertex(VertexInstances[0]));
+            FVector V1 = Desc->GetVertexPosition(Desc->GetVertexInstanceVertex(VertexInstances[1]));
+            FVector V2 = Desc->GetVertexPosition(Desc->GetVertexInstanceVertex(VertexInstances[2]));
+
+            FVector LocalNormal = FVector::CrossProduct(V2 - V0, V1 - V0).GetSafeNormal();
+            FVector WorldNormal = ComponentToWorld.TransformVectorNoScale(LocalNormal).GetSafeNormal();
+            if (WorldNormal.Z < 0) WorldNormal = -WorldNormal;
+
+            if (WorldNormal.Z >= MaxSlopeCosine)
+            {
+                CandidateLocations.Add((V0 + V1 + V2) / 3.0f);
+            }
         }
     }
 
@@ -529,7 +598,7 @@ void ATerrainGen::CalculateSpawnPoints()
     {
         if (SpawnPoints.Num() >= NumPlayerStarts) break;
 
-        FVector WorldCandidate = ActorToWorld.TransformPosition(LocalCandidate);
+        FVector WorldCandidate = ComponentToWorld.TransformPosition(LocalCandidate);
         bool bTooClose = false;
         for (const FVector& ExistingSpawn : SpawnPoints)
         {
@@ -555,15 +624,7 @@ void ATerrainGen::CalculateSpawnPoints()
 #endif
 }
 
-void ATerrainGen::CheckCollisionReady()
-{
-    if (Mesh && Mesh->GetBodySetup() && Mesh->GetBodySetup()->bHasCookedCollisionData)
-    {
-        GetWorldTimerManager().ClearTimer(CollisionReadyTimer);
-        RestoreActorPhysics();
-        UE_LOG(LogTemp, Log, TEXT("ATerrainGen: Collision is ready."));
-    }
-}
+
 
 void ATerrainGen::DisableActorPhysicsTemporarily()
 {
@@ -618,12 +679,12 @@ void ATerrainGen::GenerateTerrain_Editor()
     // Simplified, blocking version for the editor
     if (!Mesh)
     {
-        Mesh = NewObject<UProceduralMeshComponent>(this, TEXT("ProcMeshEditor"));
+        Mesh = NewObject<UStaticMeshComponent>(this, TEXT("ProcMeshEditor"));
         Mesh->RegisterComponent();
         SetRootComponent(Mesh);
     }
 
-    int32 W, H;
+    int32 W = 0, H = 0;
     TArray<uint8> LocalHeightData;
     bool bLoaded = false;
     
@@ -692,8 +753,53 @@ void ATerrainGen::GenerateTerrain_Editor()
         }
     }
     
-    Mesh->ClearAllMeshSections();
-    Mesh->CreateMeshSection_LinearColor(0, LocalVertices, LocalTriangles, {}, LocalUVs, {}, {}, true);
+    GeneratedMesh = NewObject<UStaticMesh>(this, TEXT("EditorGeneratedTerrainMesh"));
+    GeneratedMesh->InitResources();
+    GeneratedMesh->bAllowCPUAccess = true;
+    GeneratedMesh->SetLightingGuid();
+
+    UStaticMeshDescription* Desc = GeneratedMesh->CreateStaticMeshDescription();
+
+    TArray<FVertexInstanceID> VertexInstanceIDs;
+    VertexInstanceIDs.SetNum(LocalVertices.Num());
+
+    for(int32 i = 0; i < LocalVertices.Num(); ++i)
+    {
+        FVertexID VertexID = Desc->CreateVertex();
+        Desc->SetVertexPosition(VertexID, LocalVertices[i]);
+        FVertexInstanceID VI = Desc->CreateVertexInstance(VertexID);
+        Desc->SetVertexInstanceUV(VI, LocalUVs[i]);
+        VertexInstanceIDs[i] = VI;
+    }
+    
+    FPolygonGroupID PolygonGroup = Desc->CreatePolygonGroup();
+    for (int32 i = 0; i < LocalTriangles.Num(); i += 3)
+    {
+        FVertexInstanceID V0 = VertexInstanceIDs[LocalTriangles[i]];
+        FVertexInstanceID V1 = VertexInstanceIDs[LocalTriangles[i+1]];
+        FVertexInstanceID V2 = VertexInstanceIDs[LocalTriangles[i+2]];
+        TArray<FEdgeID> NewEdges;
+        Desc->CreateTriangle(PolygonGroup, {V0, V1, V2}, NewEdges);
+    }
+    
+
+    
+    GeneratedMesh->BuildFromStaticMeshDescriptions({Desc});
+    GeneratedMesh->PostEditChange();
+    
+    if (GeneratedMesh->GetBodySetup())
+    {
+        GeneratedMesh->GetBodySetup()->CollisionTraceFlag = CTF_UseComplexAsSimple;
+    }
+    
+    if (TerrainMaterial)
+    {
+        GeneratedMesh->GetStaticMaterials().Add(FStaticMaterial(TerrainMaterial, FName("TerrainMaterial")));
+    }
+
+    Mesh->SetMobility(EComponentMobility::Movable);
+    Mesh->SetStaticMesh(GeneratedMesh);
+    Mesh->SetMobility(EComponentMobility::Static);
     CalculateSpawnPoints();
 }
 

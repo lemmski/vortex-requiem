@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "ProceduralMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Texture2D.h"
 #include "ProcTerrain.h"
 #include "TerrainTypes.h"
@@ -16,6 +16,7 @@ enum class EGenerationState : uint8
     GenerateProcedural,
     CreateMesh,
     UploadMesh,
+    WaitForCollision,
     CalculateSpawnPoints,
     BuildNavigation,
     Finalize
@@ -46,6 +47,9 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     ETerrainPreset Preset;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
+    UMaterialInterface* TerrainMaterial;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     float XYScale;
@@ -97,7 +101,10 @@ protected:
 
 private:
     UPROPERTY(VisibleAnywhere, Transient)
-    UProceduralMeshComponent* Mesh;
+    UStaticMeshComponent* Mesh;
+
+    UPROPERTY(Transient)
+    class UStaticMesh* GeneratedMesh;
 
     UPROPERTY(Transient)
     class UUserWidget* ActiveLoadingWidget;
@@ -130,6 +137,7 @@ private:
     void Step_GenerateProcedural();
     void Step_CreateMesh();
     void Step_UploadMesh();
+    void Step_WaitForCollision();
     void Step_CalculateSpawnPoints();
     void Step_BuildNavigation();
     void Step_Finalize();
