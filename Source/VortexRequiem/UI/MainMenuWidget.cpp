@@ -19,6 +19,7 @@
 void UMainMenuWidget::NativeConstruct()
 {
     Super::NativeConstruct();
+    bIsShuttingDown = false;
 
     UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::NativeConstruct - Menu widget created. NetMode=%d"),
         GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"),
@@ -30,15 +31,56 @@ void UMainMenuWidget::NativeConstruct()
     }
     
     PopulateBiomeButtons();
+    PlayRandomMusicTrack();
+}
 
-    if (MusicTrack && !AudioComponent)
+void UMainMenuWidget::NativeDestruct()
+{
+    if (AudioComponent)
     {
-        AudioComponent = UGameplayStatics::CreateSound2D(this, MusicTrack);
-        if (AudioComponent)
+        AudioComponent->OnAudioFinished.RemoveAll(this);
+        AudioComponent->Stop();
+    }
+    Super::NativeDestruct();
+}
+
+void UMainMenuWidget::PlayRandomMusicTrack()
+{
+    if (MusicTracks.Num() > 0)
+    {
+        int32 RandomIndex = FMath::RandRange(0, MusicTracks.Num() - 1);
+        USoundBase* SelectedTrack = MusicTracks[RandomIndex];
+
+        if (SelectedTrack)
         {
-            AudioComponent->FadeIn(MusicFadeInDuration);
+            if (!AudioComponent)
+            {
+                AudioComponent = UGameplayStatics::CreateSound2D(this, SelectedTrack);
+            }
+            
+            if (AudioComponent)
+            {
+                // Ensure we are in a clean state and bind finish delegate BEFORE starting playback
+                AudioComponent->OnAudioFinished.RemoveAll(this);
+                AudioComponent->OnAudioFinished.AddDynamic(this, &UMainMenuWidget::OnMusicTrackFinished);
+                AudioComponent->Stop();
+                AudioComponent->SetSound(SelectedTrack);
+                AudioComponent->FadeIn(MusicFadeInDuration);
+            }
         }
     }
+}
+
+void UMainMenuWidget::OnMusicTrackFinished()
+{
+    // Don't start a new track if we're in the process of shutting down
+    if (bIsShuttingDown)
+    {
+        return;
+    }
+    UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::OnMusicTrackFinished - Selecting next random track"),
+        GetWorld() && GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"));
+    PlayRandomMusicTrack();
 }
 
 void UMainMenuWidget::PopulateBiomeButtons()
@@ -154,6 +196,7 @@ void UMainMenuWidget::HandleGenerationProgress(const FText& ProgressText)
 
 void UMainMenuWidget::HandleGenerationComplete()
 {
+    bIsShuttingDown = true;
     UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::HandleGenerationComplete - Called"),
         GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"));
 
@@ -163,6 +206,7 @@ void UMainMenuWidget::HandleGenerationComplete()
     // Fade out music
     if (AudioComponent)
     {
+        AudioComponent->OnAudioFinished.RemoveAll(this);
         AudioComponent->FadeOut(1.0f, 0.0f);
     }
 
@@ -201,3 +245,4 @@ void UMainMenuWidget::RemoveFromParent()
 
     Super::RemoveFromParent();
 }
+

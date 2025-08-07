@@ -32,9 +32,15 @@ public:
 protected:
     virtual void NativeConstruct() override;
     virtual void RemoveFromParent() override;
-    
+    virtual void NativeDestruct() override;
+
     UFUNCTION()
     void DelayedStartGeneration();
+
+    void PlayRandomMusicTrack();
+    
+    UFUNCTION()
+    void OnMusicTrackFinished();
 
     UFUNCTION(BlueprintCallable, Category = "UI")
     void PopulateBiomeButtons();
@@ -70,7 +76,7 @@ protected:
     TSubclassOf<UBiomeButtonWidget> BiomeButtonWidgetClass;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
-    USoundBase* MusicTrack;
+    TArray<USoundBase*> MusicTracks;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Audio")
     float MusicFadeInDuration = 2.0f;
@@ -82,4 +88,5 @@ private:
     ETerrainPreset PresetToGenerate;
     FTimerHandle GenerationTimerHandle;
     FTimerHandle TerrainReadyCheckTimer;
+    bool bIsShuttingDown;
 };
