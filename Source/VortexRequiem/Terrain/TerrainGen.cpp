@@ -89,6 +89,16 @@ void ATerrainGen::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifet
 	DOREPLIFETIME(ATerrainGen, bTerrainReady);
 }
 
+void ATerrainGen::OnRep_Preset()
+{
+    // If a preset is replicated in a runtime session, clients should build the same terrain locally.
+    if (!HasAuthority())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[CLIENT] TerrainGen: OnRep_Preset starting generation for replicated preset %d"), (int32)Preset);
+        StartAsyncGeneration();
+    }
+}
+
 void ATerrainGen::OnRep_Seed()
 {
     UE_LOG(LogTemp, Warning, TEXT("[CLIENT] TerrainGen: Replicated Seed %d received. Starting generation."), Seed);
@@ -110,6 +120,16 @@ void ATerrainGen::OnRep_SpawnPoints()
 void ATerrainGen::OnRep_TerrainReady()
 {
     UE_LOG(LogTemp, Warning, TEXT("[CLIENT] TerrainGen: Terrain ready status changed to %s"), bTerrainReady ? TEXT("true") : TEXT("false"));
+    // Late joiners: if server says ready but we don't have a mesh yet, generate now so local collision matches server
+    if (!HasAuthority() && bTerrainReady)
+    {
+        const bool bHasMesh = Mesh && Mesh->GetStaticMesh() != nullptr;
+        if (!bHasMesh && CurrentState == EGenerationState::Idle)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[CLIENT] TerrainGen: OnRep_TerrainReady detected no mesh. Generating now."));
+            StartAsyncGeneration();
+        }
+    }
 }
 
 void ATerrainGen::GenerateTerrainFromPreset(ETerrainPreset NewPreset)

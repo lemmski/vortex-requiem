@@ -49,8 +49,11 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     UTexture2D* HeightmapTexture;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain", Replicated)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain", ReplicatedUsing=OnRep_Preset)
     ETerrainPreset Preset;
+
+    UFUNCTION()
+    void OnRep_Preset();
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", ReplicatedUsing=OnRep_Seed)
 	int32 Seed;

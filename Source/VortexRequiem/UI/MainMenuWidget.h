@@ -51,6 +51,9 @@ protected:
     UFUNCTION()
     void HandleGenerationComplete();
 
+    UFUNCTION()
+    void OnLocalGenerationComplete();
+
     UPROPERTY(meta = (BindWidget))
     UWidgetSwitcher* MainWidgetSwitcher;
 

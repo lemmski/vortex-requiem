@@ -25,6 +25,31 @@ void UMainMenuWidget::NativeConstruct()
         GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"),
         (int32)GetWorld()->GetNetMode());
 
+    // Always bind to terrain readiness so clients auto-close the menu when the server signals ready
+    if (UWorld* World = GetWorld())
+    {
+        ATerrainGen* TerrainActor = nullptr;
+        for (TActorIterator<ATerrainGen> It(World); It; ++It)
+        {
+            TerrainActor = *It;
+            break;
+        }
+
+        if (TerrainActor)
+        {
+            // Ensure we don't bind multiple times if the widget is reconstructed
+            TerrainActor->OnAllClientsReady.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+            TerrainActor->OnAllClientsReady.AddDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+
+            // If terrain is already ready when this widget appears, close immediately
+            if (TerrainActor->IsTerrainReady())
+            {
+                HandleGenerationComplete();
+                return;
+            }
+        }
+    }
+
     if (SinglePlayerButton)
     {
         SinglePlayerButton->OnClicked.AddDynamic(this, &UMainMenuWidget::ShowBiomeSelectionScreen);
@@ -173,6 +198,7 @@ void UMainMenuWidget::DelayedStartGeneration()
     {
         // Bind to the new multicast delegate
         TerrainActor->OnAllClientsReady.AddDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+        TerrainActor->OnGenerationComplete.AddDynamic(this, &UMainMenuWidget::OnLocalGenerationComplete);
         
         // Only trigger generation on the server
         if (GetWorld()->GetNetMode() != NM_Client)
@@ -233,6 +259,12 @@ void UMainMenuWidget::HandleGenerationComplete()
         PlayerController->SetInputMode(InputMode);
         PlayerController->SetShowMouseCursor(false);
     }
+}
+
+void UMainMenuWidget::OnLocalGenerationComplete()
+{
+    // Mirrors HandleGenerationComplete to ensure the UI closes even if we locally generated without receiving multicast
+    HandleGenerationComplete();
 }
 
 void UMainMenuWidget::RemoveFromParent()
