@@ -61,10 +61,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     UMaterialInterface* TerrainMaterial;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain", Replicated)
     float XYScale;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain", Replicated)
     float ZScale;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")

@@ -83,6 +83,8 @@ void ATerrainGen::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifet
 
 	DOREPLIFETIME(ATerrainGen, Preset);
 	DOREPLIFETIME(ATerrainGen, Seed);
+	DOREPLIFETIME(ATerrainGen, XYScale);
+	DOREPLIFETIME(ATerrainGen, ZScale);
 	DOREPLIFETIME(ATerrainGen, SpawnPoints);
 	DOREPLIFETIME(ATerrainGen, bTerrainReady);
 }
@@ -369,13 +371,16 @@ void ATerrainGen::Step_CreateMesh()
         Vertices.SetNumUninitialized(HeightmapWidth * HeightmapHeight);
         UVs.SetNumUninitialized(HeightmapWidth * HeightmapHeight);
         const float Scale = ZScale / 255.f;
+        const float HalfWidth = (HeightmapWidth - 1) * XYScale * 0.5f;
+        const float HalfHeight = (HeightmapHeight - 1) * XYScale * 0.5f;
+        
         for (int32 y = 0; y < HeightmapHeight; ++y)
         {
             for (int32 x = 0; x < HeightmapWidth; ++x)
             {
                 int32 idx = y * HeightmapWidth + x;
                 float h = HeightData[idx] * Scale;
-                Vertices[idx] = FVector(x * XYScale, y * XYScale, h);
+                Vertices[idx] = FVector(x * XYScale - HalfWidth, y * XYScale - HalfHeight, h);
                 UVs[idx] = FVector2D((float)x / (HeightmapWidth - 1), (float)y / (HeightmapHeight - 1));
             }
         }
@@ -428,6 +433,9 @@ void ATerrainGen::Step_CreateMesh()
         int32 NewH = Rows.Num();
         int32 NewW = Cols.Num();
 
+        const float HalfWidth = (HeightmapWidth - 1) * XYScale * 0.5f;
+        const float HalfHeight = (HeightmapHeight - 1) * XYScale * 0.5f;
+
         Vertices.SetNumUninitialized(NewW * NewH);
         UVs.SetNumUninitialized(NewW * NewH);
         for (int32 yi = 0; yi < NewH; ++yi)
@@ -437,7 +445,7 @@ void ATerrainGen::Step_CreateMesh()
                 int32 gy = Rows[yi], gx = Cols[xi];
                 float h = HeightData[gy * HeightmapWidth + gx] * Scale;
                 int32 idx = yi * NewW + xi;
-                Vertices[idx] = FVector(gx * XYScale, gy * XYScale, h);
+                Vertices[idx] = FVector(gx * XYScale - HalfWidth, gy * XYScale - HalfHeight, h);
                 UVs[idx] = FVector2D((float)gx / (HeightmapWidth - 1), (float)gy / (HeightmapHeight - 1));
             }
         }
@@ -463,6 +471,10 @@ void ATerrainGen::Step_UploadMesh()
     GeneratedMesh = NewObject<UStaticMesh>(this, TEXT("GeneratedTerrainMesh"));
     GeneratedMesh->InitResources();
     GeneratedMesh->bAllowCPUAccess = true;
+    
+    // Set mobility to movable to allow for runtime updates
+    Mesh->SetMobility(EComponentMobility::Movable);
+
     GeneratedMesh->SetLightingGuid();
 
     UStaticMeshDescription* Desc = GeneratedMesh->CreateStaticMeshDescription();
@@ -493,10 +505,10 @@ void ATerrainGen::Step_UploadMesh()
     
     GeneratedMesh->BuildFromStaticMeshDescriptions({Desc});
     
-    // Force bounds calculation before PostEditChange
-    GeneratedMesh->CalculateExtendedBounds();
-    
     GeneratedMesh->PostEditChange();
+    
+    // Force bounds calculation after PostEditChange
+    GeneratedMesh->CalculateExtendedBounds();
 
     if (GeneratedMesh->GetBodySetup())
     {
@@ -563,6 +575,7 @@ void ATerrainGen::Step_Finalize()
     if (Mesh->GetStaticMesh())
     {
         RestoreActorPhysics();
+        Mesh->SetMobility(EComponentMobility::Static);
     }
 
     // Mark terrain as ready on server
@@ -627,7 +640,7 @@ void ATerrainGen::CalculateSpawnPoints()
     if (!Desc) return;
 
     const float MaxSlopeCosine = FMath::Cos(FMath::DegreesToRadians(MaxSpawnSlopeInDegrees));
-    const FTransform ComponentToWorld = Mesh->GetComponentTransform();
+    const FTransform ActorToWorld = GetActorTransform();
 
     TArray<FVector> CandidateLocations;
     for (const FPolygonID PolygonID : Desc->Polygons().GetElementIDs())
@@ -643,7 +656,7 @@ void ATerrainGen::CalculateSpawnPoints()
             FVector V2 = Desc->GetVertexPosition(Desc->GetVertexInstanceVertex(VertexInstances[2]));
 
             FVector LocalNormal = FVector::CrossProduct(V2 - V0, V1 - V0).GetSafeNormal();
-            FVector WorldNormal = ComponentToWorld.TransformVectorNoScale(LocalNormal).GetSafeNormal();
+            FVector WorldNormal = ActorToWorld.TransformVectorNoScale(LocalNormal).GetSafeNormal();
             if (WorldNormal.Z < 0) WorldNormal = -WorldNormal;
 
             if (WorldNormal.Z >= MaxSlopeCosine)
@@ -669,7 +682,7 @@ void ATerrainGen::CalculateSpawnPoints()
     {
         if (SpawnPoints.Num() >= NumPlayerStarts) break;
 
-        FVector WorldCandidate = ComponentToWorld.TransformPosition(LocalCandidate);
+        FVector WorldCandidate = ActorToWorld.TransformPosition(LocalCandidate);
         bool bTooClose = false;
         for (const FVector& ExistingSpawn : SpawnPoints)
         {
@@ -800,6 +813,9 @@ void ATerrainGen::GenerateTerrain_Editor()
     TArray<FVector2D> LocalUVs;
     
     const float Scale = ZScale / 255.f;
+    const float HalfWidth = (W - 1) * XYScale * 0.5f;
+    const float HalfHeight = (H - 1) * XYScale * 0.5f;
+    
     LocalVertices.SetNumUninitialized(W*H);
     LocalUVs.SetNumUninitialized(W*H);
     for(int32 y = 0; y < H; ++y)
@@ -808,7 +824,7 @@ void ATerrainGen::GenerateTerrain_Editor()
         {
             int32 idx = y * W + x;
             float h = LocalHeightData[idx] * Scale;
-            LocalVertices[idx] = FVector(x*XYScale, y*XYScale, h);
+            LocalVertices[idx] = FVector(x*XYScale - HalfWidth, y*XYScale - HalfHeight, h);
             LocalUVs[idx] = FVector2D((float)x/(W-1), (float)y/(H-1));
         }
     }
