@@ -8,6 +8,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/CollisionProfile.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "NavigationSystem.h"
@@ -24,6 +25,7 @@
 #include "DrawDebugHelpers.h"
 #include "Engine/EngineTypes.h"
 #include "Engine/OverlapResult.h"
+#include "Net/UnrealNetwork.h"
 
 namespace
 {
@@ -41,14 +43,12 @@ namespace
 ATerrainGen::ATerrainGen()
 {
     PrimaryActorTick.bCanEverTick = false;
+	bReplicates = true;
+	bAlwaysRelevant = true; // Ensure terrain is always relevant for replication
 
     Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ProcMesh"));
-    Mesh->ClearFlags(RF_Transactional);
-    Mesh->SetFlags(RF_Transient | RF_DuplicateTransient);
-    SetRootComponent(Mesh);
-    Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
     Mesh->SetMobility(EComponentMobility::Static);
-    Mesh->SetCastShadow(false);
+    SetRootComponent(Mesh);
 
     static ConstructorHelpers::FObjectFinder<UMaterialInterface> DefaultMaterial(TEXT("Material'/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial'"));
     if (DefaultMaterial.Succeeded())
@@ -74,10 +74,59 @@ ATerrainGen::ATerrainGen()
     bUseLargeSpawnSpheres = false;
     
     CurrentState = EGenerationState::Idle;
+    bTerrainReady = false;
+}
+
+void ATerrainGen::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(ATerrainGen, Preset);
+	DOREPLIFETIME(ATerrainGen, Seed);
+	DOREPLIFETIME(ATerrainGen, SpawnPoints);
+	DOREPLIFETIME(ATerrainGen, bTerrainReady);
+}
+
+void ATerrainGen::OnRep_Seed()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[CLIENT] TerrainGen: Replicated Seed %d received. Starting generation."), Seed);
+    if (bGenerateOnBeginPlay)
+    {
+        StartAsyncGeneration();
+    }
+}
+
+void ATerrainGen::OnRep_SpawnPoints()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[CLIENT] TerrainGen: Received %d spawn points from server"), SpawnPoints.Num());
+    for (int32 i = 0; i < SpawnPoints.Num(); i++)
+    {
+        UE_LOG(LogTemp, VeryVerbose, TEXT("[CLIENT] TerrainGen: Spawn point %d: %s"), i, *SpawnPoints[i].ToString());
+    }
+}
+
+void ATerrainGen::OnRep_TerrainReady()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[CLIENT] TerrainGen: Terrain ready status changed to %s"), bTerrainReady ? TEXT("true") : TEXT("false"));
 }
 
 void ATerrainGen::GenerateTerrainFromPreset(ETerrainPreset NewPreset)
 {
+    // Prevent regeneration if we're already generating or if terrain is already ready with the same preset
+    if (CurrentState != EGenerationState::Idle)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen::GenerateTerrainFromPreset - Already generating terrain, ignoring request"), 
+            HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
+        return;
+    }
+    
+    if (bTerrainReady && Preset == NewPreset)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen::GenerateTerrainFromPreset - Terrain already ready with same preset, ignoring request"), 
+            HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
+        return;
+    }
+    
     Preset = NewPreset;
     Regenerate();
 }
@@ -107,9 +156,23 @@ void ATerrainGen::BeginPlay()
 {
     Super::BeginPlay();
 
+    UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen::BeginPlay - bGenerateOnBeginPlay=%s, HasAuthority=%s"), 
+        HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"), 
+        bGenerateOnBeginPlay ? TEXT("true") : TEXT("false"),
+        HasAuthority() ? TEXT("true") : TEXT("false"));
+
     if (bGenerateOnBeginPlay)
     {
-        StartAsyncGeneration();
+		if(HasAuthority())
+		{
+			Seed = FMath::Rand();
+			UE_LOG(LogTemp, Warning, TEXT("[SERVER] TerrainGen: Generated Seed %d. Starting generation."), Seed);
+			StartAsyncGeneration();
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[CLIENT] TerrainGen: Waiting for replicated seed from server..."));
+		}
     }
 }
 
@@ -117,23 +180,17 @@ void ATerrainGen::StartAsyncGeneration()
 {
     if (CurrentState != EGenerationState::Idle)
     {
-        UE_LOG(LogTemp, Warning, TEXT("ATerrainGen::StartAsyncGeneration called while already busy."));
+        UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen::StartAsyncGeneration called while already busy."), 
+            HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
         return;
     }
 
+    UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen::StartAsyncGeneration - Beginning terrain generation"), 
+        HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
+
     OnGenerationProgress.Broadcast(FText::FromString("Starting terrain generation..."));
 
-    if (!Mesh)
-    {
-        Mesh = NewObject<UStaticMeshComponent>(this, TEXT("ProcMeshPIE"));
-        Mesh->RegisterComponent();
-        SetRootComponent(Mesh);
-        Mesh->ClearFlags(RF_Transactional);
-        Mesh->SetFlags(RF_Transient | RF_DuplicateTransient);
-        Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
-        Mesh->SetMobility(EComponentMobility::Static);
-        Mesh->SetCastShadow(false);
-    }
+    ensure(Mesh != nullptr);
     
     DisableActorPhysicsTemporarily();
     
@@ -284,7 +341,7 @@ void ATerrainGen::Step_GenerateProcedural()
         // Fallback if preset is None or fails
         HeightmapWidth = 1024;
         HeightmapHeight = 1024;
-        FProcTerrain PT(HeightmapWidth, HeightmapHeight, FMath::Rand());
+        FProcTerrain PT(HeightmapWidth, HeightmapHeight, Seed);
         PT.GenerateFBM(FFBMSettings());
         PT.ApplyThermal(FThermalSettings());
         PT.ApplyHydraulic(FHydraulicSettings());
@@ -435,11 +492,18 @@ void ATerrainGen::Step_UploadMesh()
 
     
     GeneratedMesh->BuildFromStaticMeshDescriptions({Desc});
+    
+    // Force bounds calculation before PostEditChange
+    GeneratedMesh->CalculateExtendedBounds();
+    
     GeneratedMesh->PostEditChange();
 
     if (GeneratedMesh->GetBodySetup())
     {
         GeneratedMesh->GetBodySetup()->CollisionTraceFlag = CTF_UseComplexAsSimple;
+        GeneratedMesh->GetBodySetup()->bNeverNeedsCookedCollisionData = false;
+        GeneratedMesh->GetBodySetup()->InvalidatePhysicsData();
+        GeneratedMesh->GetBodySetup()->CreatePhysicsMeshes();
     }
 
     if (TerrainMaterial)
@@ -447,9 +511,7 @@ void ATerrainGen::Step_UploadMesh()
         GeneratedMesh->GetStaticMaterials().Add(FStaticMaterial(TerrainMaterial, FName("TerrainMaterial")));
     }
 
-    Mesh->SetMobility(EComponentMobility::Movable);
     Mesh->SetStaticMesh(GeneratedMesh);
-    Mesh->SetMobility(EComponentMobility::Static);
     
     // Cache the generated mesh
     GTerrainCache.Vertices = Vertices;
@@ -498,30 +560,31 @@ void ATerrainGen::Step_Finalize()
 {
     OnGenerationProgress.Broadcast(FText::FromString("Finalizing..."));
 
-    APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
-    if (PlayerPawn && SpawnPoints.Num() > 0)
-    {
-        int32 SpawnIndex = FMath::RandRange(0, SpawnPoints.Num() - 1);
-        FVector WorldLocation = SpawnPoints[SpawnIndex];
-
-        float Safety = 10.0f;
-        float PawnHalfHeight = 0.f;
-        if (ACharacter* Character = Cast<ACharacter>(PlayerPawn))
-        {
-            PawnHalfHeight = Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
-        }
-        WorldLocation.Z += PawnHalfHeight + Safety;
-        PlayerPawn->SetActorLocation(WorldLocation);
-    }
-
     if (Mesh->GetStaticMesh())
     {
         RestoreActorPhysics();
     }
 
+    // Mark terrain as ready on server
+    if (HasAuthority())
+    {
+        bTerrainReady = true;
+        UE_LOG(LogTemp, Warning, TEXT("[SERVER] TerrainGen: Terrain generation complete. bTerrainReady set to true"));
+        
+        // Notify all clients that the terrain is ready
+        Multicast_NotifyClientsReady();
+    }
+
     OnGenerationComplete.Broadcast();
     CurrentState = EGenerationState::Idle;
     GetWorldTimerManager().ClearTimer(GenerationProcessTimer);
+}
+
+void ATerrainGen::Multicast_NotifyClientsReady_Implementation()
+{
+    UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen::Multicast_NotifyClientsReady_Implementation - Broadcasting OnAllClientsReady"),
+        GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"));
+    OnAllClientsReady.Broadcast();
 }
 
 bool ATerrainGen::LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int32& OutHeight, TArray<uint8>& OutData)
@@ -549,8 +612,16 @@ bool ATerrainGen::LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int
 
 void ATerrainGen::CalculateSpawnPoints()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen::CalculateSpawnPoints - Starting spawn point calculation"), 
+        HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
+    
     SpawnPoints.Empty();
-    if (NumPlayerStarts <= 0 || !GeneratedMesh) return;
+    if (NumPlayerStarts <= 0 || !GeneratedMesh) 
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen::CalculateSpawnPoints - No player starts requested or no mesh"), 
+            HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"));
+        return;
+    }
 
     UStaticMeshDescription* Desc = GeneratedMesh->GetStaticMeshDescription(0);
     if (!Desc) return;
@@ -611,8 +682,12 @@ void ATerrainGen::CalculateSpawnPoints()
         if (!bTooClose)
         {
             SpawnPoints.Add(WorldCandidate);
+            UE_LOG(LogTemp, VeryVerbose, TEXT("[%s] TerrainGen: Added spawn point at %s"), 
+                HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"), *WorldCandidate.ToString());
         }
     }
+    UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen: Calculated %d spawn points from %d candidates."), 
+        HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"), SpawnPoints.Num(), CandidateLocations.Num());
 
 #if WITH_EDITOR
     FlushPersistentDebugLines(GetWorld());
@@ -677,12 +752,7 @@ void ATerrainGen::RestoreActorPhysics()
 void ATerrainGen::GenerateTerrain_Editor()
 {
     // Simplified, blocking version for the editor
-    if (!Mesh)
-    {
-        Mesh = NewObject<UStaticMeshComponent>(this, TEXT("ProcMeshEditor"));
-        Mesh->RegisterComponent();
-        SetRootComponent(Mesh);
-    }
+    ensure(Mesh != nullptr);
 
     int32 W = 0, H = 0;
     TArray<uint8> LocalHeightData;
@@ -797,9 +867,7 @@ void ATerrainGen::GenerateTerrain_Editor()
         GeneratedMesh->GetStaticMaterials().Add(FStaticMaterial(TerrainMaterial, FName("TerrainMaterial")));
     }
 
-    Mesh->SetMobility(EComponentMobility::Movable);
     Mesh->SetStaticMesh(GeneratedMesh);
-    Mesh->SetMobility(EComponentMobility::Static);
     CalculateSpawnPoints();
 }
 

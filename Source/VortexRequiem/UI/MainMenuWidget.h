@@ -31,6 +31,7 @@ public:
 
 protected:
     virtual void NativeConstruct() override;
+    virtual void RemoveFromParent() override;
     
     UFUNCTION()
     void DelayedStartGeneration();
@@ -80,4 +81,5 @@ private:
     
     ETerrainPreset PresetToGenerate;
     FTimerHandle GenerationTimerHandle;
+    FTimerHandle TerrainReadyCheckTimer;
 };

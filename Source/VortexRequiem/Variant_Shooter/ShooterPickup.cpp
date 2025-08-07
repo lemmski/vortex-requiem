@@ -9,10 +9,12 @@
 #include "ShooterWeapon.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
+#include "Net/UnrealNetwork.h"
 
 AShooterPickup::AShooterPickup()
 {
  	PrimaryActorTick.bCanEverTick = true;
+	bReplicates = true;
 
 	// create the root
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
@@ -36,6 +38,36 @@ AShooterPickup::AShooterPickup()
 	Mesh->SetupAttachment(SphereCollision);
 
 	Mesh->SetCollisionProfileName(FName("NoCollision"));
+}
+
+void AShooterPickup::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(AShooterPickup, bIsPickedUp);
+}
+
+void AShooterPickup::OnRep_IsPickedUp()
+{
+	if (bIsPickedUp)
+	{
+		// hide this mesh
+		SetActorHiddenInGame(true);
+
+		// disable collision
+		SetActorEnableCollision(false);
+
+		// disable ticking
+		SetActorTickEnabled(false);
+	}
+	else
+	{
+		// unhide this pickup
+		SetActorHiddenInGame(false);
+
+		// call the BP handler
+		BP_OnRespawn();
+	}
 }
 
 void AShooterPickup::OnConstruction(const FTransform& Transform)
@@ -70,32 +102,26 @@ void AShooterPickup::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AShooterPickup::OnOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
-	// have we collided against a weapon holder?
-	if (IShooterWeaponHolder* WeaponHolder = Cast<IShooterWeaponHolder>(OtherActor))
+	if (HasAuthority())
 	{
-		WeaponHolder->AddWeaponClass(WeaponClass);
+		// have we collided against a weapon holder?
+		if (IShooterWeaponHolder* WeaponHolder = Cast<IShooterWeaponHolder>(OtherActor))
+		{
+			WeaponHolder->AddWeaponClass(WeaponClass);
 
-		// hide this mesh
-		SetActorHiddenInGame(true);
+			bIsPickedUp = true;
+			OnRep_IsPickedUp();
 
-		// disable collision
-		SetActorEnableCollision(false);
-
-		// disable ticking
-		SetActorTickEnabled(false);
-
-		// schedule the respawn
-		GetWorld()->GetTimerManager().SetTimer(RespawnTimer, this, &AShooterPickup::RespawnPickup, RespawnTime, false);
+			// schedule the respawn
+			GetWorld()->GetTimerManager().SetTimer(RespawnTimer, this, &AShooterPickup::RespawnPickup, RespawnTime, false);
+		}
 	}
 }
 
 void AShooterPickup::RespawnPickup()
 {
-	// unhide this pickup
-	SetActorHiddenInGame(false);
-
-	// call the BP handler
-	BP_OnRespawn();
+	bIsPickedUp = false;
+	OnRep_IsPickedUp();
 }
 
 void AShooterPickup::FinishRespawn()

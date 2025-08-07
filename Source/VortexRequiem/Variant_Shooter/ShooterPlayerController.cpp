@@ -10,13 +10,31 @@
 #include "ShooterCharacter.h"
 #include "ShooterBulletCounterUI.h"
 
+#include "UI/MainMenuWidget.h"
+#include "Terrain/TerrainGen.h"
+
 void AShooterPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// create the bullet counter widget and add it to the screen
-	//BulletCounterUI = CreateWidget<UShooterBulletCounterUI>(this, BulletCounterUIClass);
-	//BulletCounterUI->AddToPlayerScreen(0);
+	// Show main menu only for locally controlled players and if terrain is not ready
+	if (IsLocalController())
+	{
+		ATerrainGen* TerrainGen = Cast<ATerrainGen>(UGameplayStatics::GetActorOfClass(GetWorld(), ATerrainGen::StaticClass()));
+		if (!TerrainGen || !TerrainGen->IsTerrainReady())
+		{
+			if (MainMenuWidgetClass)
+			{
+				MainMenuWidget = CreateWidget<UMainMenuWidget>(this, MainMenuWidgetClass);
+				if (MainMenuWidget)
+				{
+					MainMenuWidget->AddToViewport();
+					SetShowMouseCursor(true);
+					SetInputMode(FInputModeUIOnly());
+				}
+			}
+		}
+	}
 }
 
 void AShooterPlayerController::SetupInputComponent()

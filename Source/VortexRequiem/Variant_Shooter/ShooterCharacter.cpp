@@ -10,6 +10,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
 #include "Camera/CameraComponent.h"
+#include "Net/UnrealNetwork.h"
 
 AShooterCharacter::AShooterCharacter()
 {
@@ -18,6 +19,34 @@ AShooterCharacter::AShooterCharacter()
 
 	// configure movement
 	GetCharacterMovement()->RotationRate = FRotator(0.0f, 600.0f, 0.0f);
+}
+
+void AShooterCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(AShooterCharacter, CurrentWeapon);
+	DOREPLIFETIME(AShooterCharacter, CurrentHP);
+	DOREPLIFETIME(AShooterCharacter, OwnedWeapons);
+}
+
+void AShooterCharacter::OnRep_CurrentHP()
+{
+	// a bit of a hack to update the hud, but it works
+	OnBulletCountUpdated.Broadcast(500, CurrentHP);
+}
+
+void AShooterCharacter::OnRep_CurrentWeapon(AShooterWeapon* LastWeapon)
+{
+	if (CurrentWeapon)
+	{
+		CurrentWeapon->ActivateWeapon();
+	}
+
+	if (LastWeapon)
+	{
+		LastWeapon->DeactivateWeapon();
+	}
 }
 
 void AShooterCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -40,47 +69,85 @@ void AShooterCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCo
 
 float AShooterCharacter::TakeDamage(float Damage, struct FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
-	// ignore if already dead
-	if (CurrentHP <= 0.0f)
+	if (HasAuthority())
 	{
-		return 0.0f;
-	}
-
-	// Reduce HP
-	CurrentHP -= Damage;
-
-	// Have we depleted HP?
-	if (CurrentHP <= 0.0f)
-	{
-		// deactivate the weapon
-		if (IsValid(CurrentWeapon))
+		// ignore if already dead
+		if (CurrentHP <= 0.0f)
 		{
-			CurrentWeapon->DeactivateWeapon();
+			return 0.0f;
 		}
-		
 
-		// reset the bullet counter UI
-		OnBulletCountUpdated.Broadcast(0, 0);
+		// Reduce HP
+		CurrentHP -= Damage;
+		OnRep_CurrentHP();
 
-		// destroy this character
-		Destroy();
+		// Have we depleted HP?
+		if (CurrentHP <= 0.0f)
+		{
+			Multicast_OnDeath();
+		}
 	}
 
 	return Damage;
 }
 
+void AShooterCharacter::Multicast_OnDeath_Implementation()
+{
+	// deactivate the weapon
+	if (IsValid(CurrentWeapon))
+	{
+		CurrentWeapon->DeactivateWeapon();
+	}
+
+
+	// reset the bullet counter UI
+	OnBulletCountUpdated.Broadcast(0, 0);
+
+	// destroy this character
+	Destroy();
+}
+
 void AShooterCharacter::DoStartFiring()
 {
-	// fire the current weapon
+	if (HasAuthority())
+	{
+		if (CurrentWeapon)
+		{
+			CurrentWeapon->StartFiring();
+		}
+	}
+	else
+	{
+		Server_StartFiring();
+	}
+}
+
+void AShooterCharacter::Server_StartFiring_Implementation()
+{
 	if (CurrentWeapon)
 	{
 		CurrentWeapon->StartFiring();
 	}
 }
 
+
 void AShooterCharacter::DoStopFiring()
 {
-	// stop firing the current weapon
+	if (HasAuthority())
+	{
+		if (CurrentWeapon)
+		{
+			CurrentWeapon->StopFiring();
+		}
+	}
+	else
+	{
+		Server_StopFiring();
+	}
+}
+
+void AShooterCharacter::Server_StopFiring_Implementation()
+{
 	if (CurrentWeapon)
 	{
 		CurrentWeapon->StopFiring();
@@ -89,32 +156,40 @@ void AShooterCharacter::DoStopFiring()
 
 void AShooterCharacter::DoSwitchWeapon()
 {
-	// ensure we have at least two weapons two switch between
-	if (OwnedWeapons.Num() > 1)
+	if(HasAuthority())
 	{
-		// deactivate the old weapon
-		CurrentWeapon->DeactivateWeapon();
-
-		// find the index of the current weapon in the owned list
-		int32 WeaponIndex = OwnedWeapons.Find(CurrentWeapon);
-
-		// is this the last weapon?
-		if (WeaponIndex == OwnedWeapons.Num() - 1)
+		// ensure we have at least two weapons two switch between
+		if (OwnedWeapons.Num() > 1)
 		{
-			// loop back to the beginning of the array
-			WeaponIndex = 0;
-		}
-		else {
-			// select the next weapon index
-			++WeaponIndex;
-		}
+			// find the index of the current weapon in the owned list
+			int32 WeaponIndex = OwnedWeapons.Find(CurrentWeapon);
 
-		// set the new weapon as current
-		CurrentWeapon = OwnedWeapons[WeaponIndex];
+			// is this the last weapon?
+			if (WeaponIndex == OwnedWeapons.Num() - 1)
+			{
+				// loop back to the beginning of the array
+				WeaponIndex = 0;
+			}
+			else {
+				// select the next weapon index
+				++WeaponIndex;
+			}
 
-		// activate the new weapon
-		CurrentWeapon->ActivateWeapon();
+			// set the new weapon as current
+			AShooterWeapon* LastWeapon = CurrentWeapon;
+			CurrentWeapon = OwnedWeapons[WeaponIndex];
+			OnRep_CurrentWeapon(LastWeapon);
+		}
 	}
+	else
+	{
+		Server_SwitchWeapon();
+	}
+}
+
+void AShooterCharacter::Server_SwitchWeapon_Implementation()
+{
+	DoSwitchWeapon();
 }
 
 void AShooterCharacter::AttachWeaponMeshes(AShooterWeapon* Weapon)
@@ -165,34 +240,37 @@ FVector AShooterCharacter::GetWeaponTargetLocation()
 
 void AShooterCharacter::AddWeaponClass(const TSubclassOf<AShooterWeapon>& WeaponClass)
 {
-	// do we already own this weapon?
-	AShooterWeapon* OwnedWeapon = FindWeaponOfType(WeaponClass);
-
-	if (!OwnedWeapon)
+	if(HasAuthority())
 	{
-		// spawn the new weapon
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.Owner = this;
-		SpawnParams.Instigator = this;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		SpawnParams.TransformScaleMethod = ESpawnActorScaleMethod::MultiplyWithRoot;
+		// do we already own this weapon?
+		AShooterWeapon* OwnedWeapon = FindWeaponOfType(WeaponClass);
 
-		AShooterWeapon* AddedWeapon = GetWorld()->SpawnActor<AShooterWeapon>(WeaponClass, GetActorTransform(), SpawnParams);
-
-		if (AddedWeapon)
+		if (!OwnedWeapon)
 		{
-			// add the weapon to the owned list
-			OwnedWeapons.Add(AddedWeapon);
+			// spawn the new weapon
+			FActorSpawnParameters SpawnParams;
+			SpawnParams.Owner = this;
+			SpawnParams.Instigator = this;
+			SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			SpawnParams.TransformScaleMethod = ESpawnActorScaleMethod::MultiplyWithRoot;
 
-			// if we have an existing weapon, deactivate it
-			if (CurrentWeapon)
+			AShooterWeapon* AddedWeapon = GetWorld()->SpawnActor<AShooterWeapon>(WeaponClass, GetActorTransform(), SpawnParams);
+
+			if (AddedWeapon)
 			{
-				CurrentWeapon->DeactivateWeapon();
-			}
+				// add the weapon to the owned list
+				OwnedWeapons.Add(AddedWeapon);
 
-			// switch to the new weapon
-			CurrentWeapon = AddedWeapon;
-			CurrentWeapon->ActivateWeapon();
+				// if we have an existing weapon, deactivate it
+				if (CurrentWeapon)
+				{
+					CurrentWeapon->DeactivateWeapon();
+				}
+
+				// switch to the new weapon
+				CurrentWeapon = AddedWeapon;
+				CurrentWeapon->ActivateWeapon();
+			}
 		}
 	}
 }

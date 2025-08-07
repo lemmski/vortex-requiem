@@ -99,6 +99,10 @@ protected:
 	/** Set up input action bindings */
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
 	
+	/** Set up the enhanced input mapping context - safe for multiplayer */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	void SetupEnhancedInputMappingContext(class UInputMappingContext* MappingContext, int32 Priority = 0);
+	
 
 public:
 

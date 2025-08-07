@@ -6,8 +6,12 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
+#include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "InputMappingContext.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Engine/LocalPlayer.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -145,4 +149,48 @@ void AVortexRequiemCharacter::ToggleBinoculars()
 			FirstPersonCameraComponent->SetFieldOfView(NormalFOV);
 		}
 	}
+}
+
+void AVortexRequiemCharacter::SetupEnhancedInputMappingContext(UInputMappingContext* MappingContext, int32 Priority)
+{
+	// Only set up input mapping for locally controlled pawns
+	if (!IsLocallyControlled())
+	{
+		UE_LOG(LogTemplateCharacter, Warning, TEXT("SetupEnhancedInputMappingContext called on non-locally controlled character %s - ignoring"), *GetName());
+		return;
+	}
+
+	if (!MappingContext)
+	{
+		UE_LOG(LogTemplateCharacter, Warning, TEXT("SetupEnhancedInputMappingContext called with null MappingContext"));
+		return;
+	}
+
+	// Get the player controller
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if (!PlayerController)
+	{
+		UE_LOG(LogTemplateCharacter, Warning, TEXT("SetupEnhancedInputMappingContext: No valid PlayerController found for character %s"), *GetName());
+		return;
+	}
+
+	// Get the local player
+	ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer();
+	if (!LocalPlayer)
+	{
+		UE_LOG(LogTemplateCharacter, Warning, TEXT("SetupEnhancedInputMappingContext: No LocalPlayer found for PlayerController %s"), *PlayerController->GetName());
+		return;
+	}
+
+	// Get the enhanced input subsystem
+	UEnhancedInputLocalPlayerSubsystem* InputSubsystem = LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>();
+	if (!InputSubsystem)
+	{
+		UE_LOG(LogTemplateCharacter, Warning, TEXT("SetupEnhancedInputMappingContext: No EnhancedInputLocalPlayerSubsystem found for LocalPlayer"));
+		return;
+	}
+
+	// Add the mapping context
+	InputSubsystem->AddMappingContext(MappingContext, Priority);
+	UE_LOG(LogTemplateCharacter, Log, TEXT("SetupEnhancedInputMappingContext: Successfully added mapping context for character %s"), *GetName());
 }

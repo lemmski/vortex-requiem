@@ -15,6 +15,7 @@
 AShooterWeapon::AShooterWeapon()
 {
 	PrimaryActorTick.bCanEverTick = true;
+	bReplicates = true;
 
 	// create the root
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
@@ -131,26 +132,38 @@ void AShooterWeapon::Fire()
 		return;
 	}
 	
-	// fire a projectile at the target
-	FireProjectile(WeaponOwner->GetWeaponTargetLocation());
-
-	// update the time of our last shot
-	TimeOfLastShot = GetWorld()->GetTimeSeconds();
-
-	// make noise so the AI perception system can hear us
-	MakeNoise(ShotLoudness, PawnOwner, PawnOwner->GetActorLocation(), ShotNoiseRange, ShotNoiseTag);
-
-	// are we full auto?
-	if (bFullAuto)
+	if (HasAuthority())
 	{
-		// schedule the next shot
-		GetWorld()->GetTimerManager().SetTimer(RefireTimer, this, &AShooterWeapon::Fire, RefireRate, false);
-	} else {
+		// fire a projectile at the target
+		FireProjectile(WeaponOwner->GetWeaponTargetLocation());
 
-		// for semi-auto weapons, schedule the cooldown notification
-		GetWorld()->GetTimerManager().SetTimer(RefireTimer, this, &AShooterWeapon::FireCooldownExpired, RefireRate, false);
+		// update the time of our last shot
+		TimeOfLastShot = GetWorld()->GetTimeSeconds();
 
+		// make noise so the AI perception system can hear us
+		MakeNoise(ShotLoudness, PawnOwner, PawnOwner->GetActorLocation(), ShotNoiseRange, ShotNoiseTag);
+
+		// are we full auto?
+		if (bFullAuto)
+		{
+			// schedule the next shot
+			GetWorld()->GetTimerManager().SetTimer(RefireTimer, this, &AShooterWeapon::Fire, RefireRate, false);
+		}
+		else
+		{
+			// for semi-auto weapons, schedule the cooldown notification
+			GetWorld()->GetTimerManager().SetTimer(RefireTimer, this, &AShooterWeapon::FireCooldownExpired, RefireRate, false);
+		}
 	}
+}
+
+void AShooterWeapon::Multicast_PlayMuzzleFX_Implementation()
+{
+	// play the firing montage
+	WeaponOwner->PlayFiringMontage(FiringMontage);
+
+	// add recoil
+	WeaponOwner->AddWeaponRecoil(FiringRecoil);
 }
 
 void AShooterWeapon::FireCooldownExpired()

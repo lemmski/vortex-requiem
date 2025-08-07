@@ -147,6 +147,10 @@ protected:
 	/** Fire the weapon */
 	virtual void Fire();
 
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_PlayMuzzleFX();
+
+
 	/** Called when the refire rate time has passed while shooting semi auto weapons */
 	void FireCooldownExpired();
 

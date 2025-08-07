@@ -20,6 +20,10 @@ void UMainMenuWidget::NativeConstruct()
 {
     Super::NativeConstruct();
 
+    UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::NativeConstruct - Menu widget created. NetMode=%d"),
+        GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"),
+        (int32)GetWorld()->GetNetMode());
+
     if (SinglePlayerButton)
     {
         SinglePlayerButton->OnClicked.AddDynamic(this, &UMainMenuWidget::ShowBiomeSelectionScreen);
@@ -72,6 +76,9 @@ void UMainMenuWidget::PopulateBiomeButtons()
 
 void UMainMenuWidget::ShowBiomeSelectionScreen()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::ShowBiomeSelectionScreen - Showing biome selection"),
+        GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"));
+        
     if (MainWidgetSwitcher)
     {
         MainWidgetSwitcher->SetActiveWidget(BiomeSelectionScreen);
@@ -80,6 +87,9 @@ void UMainMenuWidget::ShowBiomeSelectionScreen()
 
 void UMainMenuWidget::ShowMainMenuScreen()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::ShowMainMenuScreen - Showing main menu screen"),
+        GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"));
+        
     if (MainWidgetSwitcher)
     {
         MainWidgetSwitcher->SetActiveWidget(MainMenuScreen);
@@ -88,6 +98,10 @@ void UMainMenuWidget::ShowMainMenuScreen()
 
 void UMainMenuWidget::StartGameWithPreset(ETerrainPreset Preset)
 {
+    UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::StartGameWithPreset - Starting game with preset %d"),
+        GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"),
+        (int32)Preset);
+
     PresetToGenerate = Preset;
 
     if (LoadingScreenText)
@@ -115,9 +129,14 @@ void UMainMenuWidget::DelayedStartGeneration()
 
     if (TerrainActor)
     {
-        TerrainActor->OnGenerationProgress.AddDynamic(this, &UMainMenuWidget::HandleGenerationProgress);
-        TerrainActor->OnGenerationComplete.AddDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
-        TerrainActor->GenerateTerrainFromPreset(PresetToGenerate);
+        // Bind to the new multicast delegate
+        TerrainActor->OnAllClientsReady.AddDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+        
+        // Only trigger generation on the server
+        if (GetWorld()->GetNetMode() != NM_Client)
+        {
+            TerrainActor->GenerateTerrainFromPreset(PresetToGenerate);
+        }
     }
     else
     {
@@ -135,6 +154,12 @@ void UMainMenuWidget::HandleGenerationProgress(const FText& ProgressText)
 
 void UMainMenuWidget::HandleGenerationComplete()
 {
+    UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::HandleGenerationComplete - Called"),
+        GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"));
+
+    // Clear any running timers
+    GetWorld()->GetTimerManager().ClearTimer(TerrainReadyCheckTimer);
+
     // Fade out music
     if (AudioComponent)
     {
@@ -150,17 +175,29 @@ void UMainMenuWidget::HandleGenerationComplete()
     }
     if (TerrainActor)
     {
-        TerrainActor->OnGenerationProgress.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationProgress);
-        TerrainActor->OnGenerationComplete.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+        TerrainActor->OnAllClientsReady.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
     }
 
     // Hide the menu and return control to the player
     APlayerController* PlayerController = GetOwningPlayer();
     if (PlayerController)
     {
+        UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::HandleGenerationComplete - Removing menu from parent and setting input mode to game"),
+            GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"));
         RemoveFromParent();
         FInputModeGameOnly InputMode;
         PlayerController->SetInputMode(InputMode);
         PlayerController->SetShowMouseCursor(false);
     }
+}
+
+void UMainMenuWidget::RemoveFromParent()
+{
+    if (GetWorld()) // Add null check for GetWorld() to prevent crash
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[%s] MainMenuWidget::RemoveFromParent - Called. Widget will be removed from viewport"),
+            GetWorld()->GetNetMode() == NM_Client ? TEXT("CLIENT") : TEXT("SERVER"));
+        }
+
+    Super::RemoveFromParent();
 }

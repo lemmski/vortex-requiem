@@ -24,6 +24,7 @@ enum class EGenerationState : uint8
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnGenerationProgress, const FText&, ProgressText);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnGenerationComplete);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnAllClientsReady);
 
 UCLASS()
 class VORTEXREQUIEM_API ATerrainGen : public AActor
@@ -36,6 +37,9 @@ public:
     UFUNCTION(BlueprintCallable, Category="Terrain")
     void GenerateTerrainFromPreset(ETerrainPreset NewPreset);
 
+    UFUNCTION(BlueprintCallable, Category="Terrain")
+    bool IsTerrainReady() const { return bTerrainReady; }
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     bool bGenerateOnBeginPlay;
 
@@ -45,8 +49,14 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     UTexture2D* HeightmapTexture;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain", Replicated)
     ETerrainPreset Preset;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain", ReplicatedUsing=OnRep_Seed)
+	int32 Seed;
+
+    UFUNCTION()
+    void OnRep_Seed();
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     UMaterialInterface* TerrainMaterial;
@@ -78,8 +88,11 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawning", meta = (ClampMin = "0.0"))
     float SpawnClearanceRadius;
     
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Spawning")
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Spawning", ReplicatedUsing=OnRep_SpawnPoints)
     TArray<FVector> SpawnPoints;
+
+    UFUNCTION()
+    void OnRep_SpawnPoints();
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Spawning")
     bool bUseLargeSpawnSpheres;
@@ -90,6 +103,18 @@ public:
     UPROPERTY(BlueprintAssignable, Category = "Terrain")
     FOnGenerationComplete OnGenerationComplete;
 
+    UPROPERTY(BlueprintAssignable, Category = "Terrain")
+    FOnAllClientsReady OnAllClientsReady;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Terrain", ReplicatedUsing=OnRep_TerrainReady)
+    bool bTerrainReady;
+
+    UFUNCTION()
+    void OnRep_TerrainReady();
+
+    UFUNCTION(NetMulticast, Reliable)
+    void Multicast_NotifyClientsReady();
+
 #if WITH_EDITOR
     virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
@@ -98,8 +123,12 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 private:
+	UPROPERTY()
+	USceneComponent* DefaultSceneRoot;
+
     UPROPERTY(VisibleAnywhere, Transient)
     UStaticMeshComponent* Mesh;
 

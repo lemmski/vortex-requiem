@@ -51,18 +51,26 @@ protected:
 	float MaxAimDistance = 10000.0f;
 
 	/** Current HP remaining to this character */
-	UPROPERTY(EditAnywhere, Category="Health")
+	UPROPERTY(EditAnywhere, ReplicatedUsing=OnRep_CurrentHP, Category="Health")
 	float CurrentHP = 500.0f;
+
+	UFUNCTION()
+	void OnRep_CurrentHP();
 
 	/** Team ID for this character*/
 	UPROPERTY(EditAnywhere, Category="Team")
 	uint8 TeamByte = 0;
 
 	/** List of weapons picked up by the character */
+	UPROPERTY(Replicated)
 	TArray<AShooterWeapon*> OwnedWeapons;
 
 	/** Weapon currently equipped and ready to shoot with */
+	UPROPERTY(ReplicatedUsing=OnRep_CurrentWeapon)
 	TObjectPtr<AShooterWeapon> CurrentWeapon;
+
+	UFUNCTION()
+	void OnRep_CurrentWeapon(AShooterWeapon* LastWeapon);
 
 public:
 
@@ -78,11 +86,15 @@ protected:
 
 	/** Set up input action bindings */
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 public:
 
 	/** Handle incoming damage */
 	virtual float TakeDamage(float Damage, struct FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_OnDeath();
 
 public:
 
@@ -91,12 +103,21 @@ public:
 	void DoStartFiring();
 
 	/** Handles stop firing input */
-	UFUNCTION(BlueprintCallable, Category="Input")
+	UFUNCTION(BlueprintCallable, Category = "Input")
 	void DoStopFiring();
+	
+	UFUNCTION(Server, Reliable)
+	void Server_StartFiring();
+
+	UFUNCTION(Server, Reliable)
+	void Server_StopFiring();
 
 	/** Handles switch weapon input */
-	UFUNCTION(BlueprintCallable, Category="Input")
+	UFUNCTION(BlueprintCallable, Category = "Input")
 	void DoSwitchWeapon();
+
+	UFUNCTION(Server, Reliable)
+	void Server_SwitchWeapon();
 
 public:
 

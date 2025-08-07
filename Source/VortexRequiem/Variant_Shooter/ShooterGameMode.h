@@ -27,13 +27,29 @@ protected:
 	/** Pointer to the UI widget */
 	TObjectPtr<UShooterUI> ShooterUI;
 
-	/** Map of scores by team ID */
-	TMap<uint8, int32> TeamScores;
+	/** Players waiting to spawn until terrain is ready */
+	UPROPERTY()
+	TArray<AController*> PendingSpawnPlayers;
+
+	/** Track players that have already been spawned to prevent double spawning */
+	UPROPERTY()
+	TArray<AController*> SpawnedPlayers;
+
+	/** Timer handle for checking terrain ready status */
+	FTimerHandle TerrainCheckTimer;
+
+public:
+
+	AShooterGameMode();
 
 protected:
 
 	/** Gameplay initialization */
 	virtual void BeginPlay() override;
+	virtual void RestartPlayer(AController* NewPlayer) override;
+
+	/** Check if terrain is ready and spawn pending players */
+	void CheckTerrainAndSpawnPendingPlayers();
 
 public:
 

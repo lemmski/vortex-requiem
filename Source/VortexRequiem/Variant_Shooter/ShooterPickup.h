@@ -61,12 +61,21 @@ protected:
 	/** Timer to respawn the pickup */
 	FTimerHandle RespawnTimer;
 
+	UPROPERTY(Transient, ReplicatedUsing=OnRep_IsPickedUp)
+	bool bIsPickedUp = false;
+
+	UFUNCTION()
+	void OnRep_IsPickedUp();
+
+
 public:	
 	
 	/** Constructor */
 	AShooterPickup();
 
 protected:
+
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Native construction script */
 	virtual void OnConstruction(const FTransform& Transform) override;
