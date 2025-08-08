@@ -26,6 +26,8 @@
 #include "Engine/EngineTypes.h"
 #include "Engine/OverlapResult.h"
 #include "Net/UnrealNetwork.h"
+#include "Materials/MaterialInstance.h"
+#include "Materials/MaterialInstanceDynamic.h"
 
 namespace
 {
@@ -75,6 +77,12 @@ ATerrainGen::ATerrainGen()
     
     CurrentState = EGenerationState::Idle;
     bTerrainReady = false;
+
+    bApplySplatToMaterial = true;
+    RuntimeMID = nullptr;
+
+    // Preseed grouped materials map with known presets (empty layer maps; filled later)
+    UpdateAllPresetLayerSlots();
 }
 
 void ATerrainGen::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -170,7 +178,26 @@ void ATerrainGen::OnConstruction(const FTransform& Transform)
     Super::OnConstruction(Transform);
     if (GetWorld() && !GetWorld()->IsGameWorld())
     {
-        GenerateTerrain_Editor();
+        // Prefill layer slots from preset in editor and expose all presets
+        FProcTerrainPresetDefinition Def;
+        if (Preset != ETerrainPreset::None && ProcTerrainPresets::GetPreset(Preset, Def))
+        {
+            UpdateLayerSlotsFromPreset(Def);
+        }
+        UpdateAllPresetLayerSlots();
+        // Avoid regenerating the static mesh on every property change that doesn't affect geometry
+        const FString NewKey = FString::Printf(TEXT("Preset:%d_%f_%f_%f"), static_cast<int32>(Preset), XYScale, ZScale, HeightTolerance);
+        if (EditorLastCacheKey != NewKey)
+        {
+            EditorLastCacheKey = NewKey;
+            GenerateTerrain_Editor();
+        }
+        else
+        {
+            // Only update material bindings and splats without rebuilding geometry
+            GenerateSplatMaps(&Def);
+            ApplyMaterialBindings(&Def);
+        }
     }
 }
 
@@ -189,6 +216,15 @@ void ATerrainGen::BeginPlay()
 		{
 			Seed = FMath::Rand();
 			UE_LOG(LogTemp, Warning, TEXT("[SERVER] TerrainGen: Generated Seed %d. Starting generation."), Seed);
+            if (Preset != ETerrainPreset::None)
+            {
+                FProcTerrainPresetDefinition Def;
+                if (ProcTerrainPresets::GetPreset(Preset, Def))
+                {
+                    UpdateLayerSlotsFromPreset(Def);
+                }
+            }
+            UpdateAllPresetLayerSlots();
 			StartAsyncGeneration();
 		}
 		else
@@ -481,6 +517,17 @@ void ATerrainGen::Step_CreateMesh()
         }
     }
     
+    // Precompute splat maps if a preset with rules is active
+    {
+        FProcTerrainPresetDefinition Def;
+        FProcTerrainPresetDefinition* DefPtr = nullptr;
+        if (Preset != ETerrainPreset::None && ProcTerrainPresets::GetPreset(Preset, Def))
+        {
+            DefPtr = &Def;
+        }
+        GenerateSplatMaps(DefPtr);
+    }
+
     CurrentState = EGenerationState::UploadMesh;
 }
 
@@ -553,6 +600,17 @@ void ATerrainGen::Step_UploadMesh()
     GTerrainCache.bValid = true;
     Mesh->SetCanEverAffectNavigation(false); // Disable for now
     
+    // Bind material and splat textures using the preset definition if present
+    {
+        FProcTerrainPresetDefinition Def;
+        FProcTerrainPresetDefinition* DefPtr = nullptr;
+        if (Preset != ETerrainPreset::None && ProcTerrainPresets::GetPreset(Preset, Def))
+        {
+            DefPtr = &Def;
+        }
+        ApplyMaterialBindings(DefPtr);
+    }
+
     CurrentState = EGenerationState::WaitForCollision;
 }
 
@@ -641,6 +699,425 @@ bool ATerrainGen::LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int
 
     UE_LOG(LogTemp, Warning, TEXT("Failed to decode png: %s"), *FilePath);
     return false;
+}
+
+// --------------------------------------------------------------------------------------
+// Splat map generation and material binding
+// --------------------------------------------------------------------------------------
+
+static FORCEINLINE float SmoothStep(float Edge0, float Edge1, float X)
+{
+    const float T = FMath::Clamp((X - Edge0) / FMath::Max(Edge1 - Edge0, KINDA_SMALL_NUMBER), 0.0f, 1.0f);
+    return T * T * (3.0f - 2.0f * T);
+}
+
+void ATerrainGen::GenerateSplatMaps(const FProcTerrainPresetDefinition* OptionalPresetDef)
+{
+    SplatGroupTextures.Empty();
+    AvailableSplatGroups.Empty();
+    AvailableSplatLayers.Empty();
+
+    // Use preset rules if available, else fall back to a simple default rule set
+    FSplatMapRulesDefinition Rules;
+    if (OptionalPresetDef && OptionalPresetDef->Splat.OutputGroups.Num() > 0)
+    {
+        Rules = OptionalPresetDef->Splat;
+    }
+    else
+    {
+        Rules.BlendDistance = 0.05f;
+        Rules.bExportChannelsSeparately = false;
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("base");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("dirt"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("grass"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.35f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("rock"); L.bHasChannel = true; L.Channel = 'G';
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.5f; Group.Layers.Add(L);
+        }
+        Rules.OutputGroups.Add(Group);
+    }
+
+    const int32 W = HeightmapWidth;
+    const int32 H = HeightmapHeight;
+    if (W <= 0 || H <= 0 || HeightData.Num() != W * H)
+    {
+        return;
+    }
+
+    // Altitude [0,1]
+    TArray<float> Altitude; Altitude.SetNumUninitialized(W * H);
+    for (int32 i = 0; i < W * H; ++i)
+    {
+        Altitude[i] = static_cast<float>(HeightData[i]) / 255.0f;
+    }
+
+    // Slope estimation (norm of gradient) then normalise to 0..1
+    TArray<float> Slope; Slope.SetNumZeroed(W * H);
+    float MaxSlope = 0.0f;
+    auto SampleAlt = [&](int32 X, int32 Y) -> float
+    {
+        X = FMath::Clamp(X, 0, W - 1);
+        Y = FMath::Clamp(Y, 0, H - 1);
+        return Altitude[Y * W + X];
+    };
+    for (int32 y = 0; y < H; ++y)
+    {
+        for (int32 x = 0; x < W; ++x)
+        {
+            const float Dzdx = (SampleAlt(x + 1, y) - SampleAlt(x - 1, y)) * 0.5f;
+            const float Dzdy = (SampleAlt(x, y + 1) - SampleAlt(x, y - 1)) * 0.5f;
+            const float G = FMath::Sqrt(Dzdx * Dzdx + Dzdy * Dzdy);
+            Slope[y * W + x] = G;
+            MaxSlope = FMath::Max(MaxSlope, G);
+        }
+    }
+    if (MaxSlope > SMALL_NUMBER)
+    {
+        const float Inv = 1.0f / MaxSlope;
+        for (float& V : Slope) V *= Inv;
+    }
+
+    const float Blend = Rules.BlendDistance;
+
+    // For each output group, compute RGBA texture
+    for (const FSplatMapGroupDefinition& Group : Rules.OutputGroups)
+    {
+        // Separate base vs explicit
+        TArray<const FSplatLayerDef*> ExplicitLayers;
+        const FSplatLayerDef* BaseLayer = nullptr;
+        for (const FSplatLayerDef& L : Group.Layers)
+        {
+            if (L.bIsBaseLayer)
+            {
+                if (!BaseLayer) BaseLayer = &L; else { BaseLayer = nullptr; break; }
+            }
+            else
+            {
+                ExplicitLayers.Add(&L);
+            }
+        }
+        if (!BaseLayer)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Splat group '%s' must have exactly one base layer. Skipping."), *Group.GroupName.ToString());
+            continue;
+        }
+
+        // Track groups and layers for editor visibility
+        AvailableSplatGroups.AddUnique(Group.GroupName);
+        for (const FSplatLayerDef& L : Group.Layers)
+        {
+            AvailableSplatLayers.AddUnique(L.Name);
+        }
+
+        // Compute explicit layer weights
+        const int32 NumExp = ExplicitLayers.Num();
+        TArray<TArray<float>> LayerWeights; LayerWeights.SetNum(NumExp);
+        for (int32 li = 0; li < NumExp; ++li)
+        {
+            LayerWeights[li].SetNumUninitialized(W * H);
+        }
+        TArray<float> SumExplicit; SumExplicit.SetNumZeroed(W * H);
+
+        for (int32 li = 0; li < NumExp; ++li)
+        {
+            const FSplatLayerDef& L = *ExplicitLayers[li];
+            const FSplatLayerRuleDef& R = L.Rules;
+            float* RESTRICT LW = LayerWeights[li].GetData();
+            for (int32 i = 0; i < W * H; ++i)
+            {
+                float Influence = 1.0f;
+                const float A = Altitude[i];
+                const float S = Slope[i];
+                if (R.bHasMinAltitude)
+                {
+                    Influence *= SmoothStep(R.MinAltitude - Blend, R.MinAltitude + Blend, A);
+                }
+                if (R.bHasMaxAltitude)
+                {
+                    Influence *= (1.0f - SmoothStep(R.MaxAltitude - Blend, R.MaxAltitude + Blend, A));
+                }
+                if (R.bHasMinSlope)
+                {
+                    Influence *= SmoothStep(R.MinSlope - Blend, R.MinSlope + Blend, S);
+                }
+                if (R.bHasMaxSlope)
+                {
+                    Influence *= (1.0f - SmoothStep(R.MaxSlope - Blend, R.MaxSlope + Blend, S));
+                }
+                LW[i] = Influence;
+                SumExplicit[i] += Influence;
+            }
+        }
+
+        // Normalise explicit to sum<=1
+        for (int32 i = 0; i < W * H; ++i)
+        {
+            const float Den = FMath::Max(1.0f, SumExplicit[i]);
+            if (Den > 1.0f + KINDA_SMALL_NUMBER)
+            {
+                SumExplicit[i] = 1.0f; // will be used for base below
+            }
+            for (int32 li = 0; li < NumExp; ++li)
+            {
+                LayerWeights[li][i] /= Den;
+            }
+        }
+
+        // Base weights
+        TArray<float> BaseW; BaseW.SetNumUninitialized(W * H);
+        for (int32 i = 0; i < W * H; ++i)
+        {
+            float FinalExp = 0.0f;
+            for (int32 li = 0; li < NumExp; ++li) FinalExp += LayerWeights[li][i];
+            BaseW[i] = FMath::Clamp(1.0f - FinalExp, 0.0f, 1.0f);
+        }
+
+        // Pack RGBA
+        TArray<FColor> Pixels; Pixels.SetNumZeroed(W * H);
+        bool Used[4] = { false, false, false, false };
+        TMap<FName, int32> LayerToChannel;
+
+        auto ChannelToIndex = [](TCHAR C) -> int32
+        {
+            switch (C)
+            {
+            case 'R': case 'r': return 0;
+            case 'G': case 'g': return 1;
+            case 'B': case 'b': return 2;
+            case 'A': case 'a': return 3;
+            default: return -1;
+            }
+        };
+
+        for (int32 li = 0; li < NumExp; ++li)
+        {
+            const FSplatLayerDef& L = *ExplicitLayers[li];
+            const int32 Channel = L.bHasChannel ? ChannelToIndex(L.Channel) : -1;
+            if (Channel < 0 || Channel > 3)
+            {
+                UE_LOG(LogTemp, Warning, TEXT("Layer '%s' in group '%s' has invalid channel. Skipping."), *L.Name.ToString(), *Group.GroupName.ToString());
+                continue;
+            }
+            Used[Channel] = true;
+            LayerToChannel.Add(L.Name, Channel);
+            const float* LW = LayerWeights[li].GetData();
+            for (int32 i = 0; i < W * H; ++i)
+            {
+                const uint8 V = static_cast<uint8>(FMath::Clamp(LW[i] * 255.0f, 0.0f, 255.0f));
+                FColor& P = Pixels[i];
+                switch (Channel)
+                {
+                case 0: P.R = V; break;
+                case 1: P.G = V; break;
+                case 2: P.B = V; break;
+                case 3: P.A = V; break;
+                }
+            }
+        }
+
+        // Assign base to first available channel
+        int32 BaseChannel = 0;
+        while (BaseChannel < 4 && Used[BaseChannel]) ++BaseChannel;
+        if (BaseChannel >= 4)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Splat group '%s' had no free channel for base layer '%s'. Overwriting alpha."), *Group.GroupName.ToString(), *BaseLayer->Name.ToString());
+            BaseChannel = 3;
+        }
+        for (int32 i = 0; i < W * H; ++i)
+        {
+            const uint8 V = static_cast<uint8>(FMath::Clamp(BaseW[i] * 255.0f, 0.0f, 255.0f));
+            FColor& P = Pixels[i];
+            switch (BaseChannel)
+            {
+            case 0: P.R = V; break;
+            case 1: P.G = V; break;
+            case 2: P.B = V; break;
+            case 3: P.A = V; break;
+            }
+        }
+        LayerToChannel.Add(BaseLayer->Name, BaseChannel);
+
+        // Create texture
+        UTexture2D* Tex = CreateTextureRGBA8(W, H, Pixels, FString::Printf(TEXT("Splat_%s"), *Group.GroupName.ToString()))
+            ;
+        if (Tex)
+        {
+            SplatGroupTextures.Add(Group.GroupName, Tex);
+            SplatGroupChannelMap.Add(Group.GroupName, LayerToChannel);
+        }
+    }
+}
+
+UTexture2D* ATerrainGen::CreateTextureRGBA8(int32 InWidth, int32 InHeight, const TArray<FColor>& Pixels, const FString& DebugName)
+{
+    if (InWidth <= 0 || InHeight <= 0 || Pixels.Num() != InWidth * InHeight)
+    {
+        return nullptr;
+    }
+    UTexture2D* NewTex = UTexture2D::CreateTransient(InWidth, InHeight, EPixelFormat::PF_B8G8R8A8, DebugName.IsEmpty() ? NAME_None : FName(*DebugName));
+    if (!NewTex || !NewTex->GetPlatformData() || NewTex->GetPlatformData()->Mips.Num() == 0)
+    {
+        return nullptr;
+    }
+    FTexture2DMipMap& Mip = NewTex->GetPlatformData()->Mips[0];
+    // Must lock for write BEFORE realloc per BulkData contract
+    void* Data = Mip.BulkData.Lock(LOCK_READ_WRITE);
+    Data = Mip.BulkData.Realloc(static_cast<int64>(Pixels.Num() * sizeof(FColor)));
+    FMemory::Memcpy(Data, Pixels.GetData(), static_cast<SIZE_T>(Pixels.Num() * sizeof(FColor)));
+    Mip.BulkData.Unlock();
+    NewTex->SRGB = false; // masks should be linear
+    NewTex->CompressionSettings = TC_Masks;
+    NewTex->Filter = TF_Bilinear;
+    NewTex->UpdateResource();
+    return NewTex;
+}
+
+void ATerrainGen::ApplyMaterialBindings(const FProcTerrainPresetDefinition* OptionalPresetDef)
+{
+    if (!Mesh)
+    {
+        return;
+    }
+    if (!RuntimeMID)
+    {
+        RuntimeMID = Mesh->CreateAndSetMaterialInstanceDynamic(0);
+    }
+    if (!RuntimeMID)
+    {
+        return;
+    }
+
+    // Base material assignment if provided
+    if (TerrainMaterial)
+    {
+        Mesh->SetMaterial(0, RuntimeMID);
+    }
+
+    if (bApplySplatToMaterial)
+    {
+        for (const TPair<FName, UTexture2D*>& Pair : SplatGroupTextures)
+        {
+            const FName ParamName(*FString::Printf(TEXT("Splat_%s"), *Pair.Key.ToString()));
+            RuntimeMID->SetTextureParameterValue(ParamName, Pair.Value);
+        }
+    }
+
+    // Bind per-layer textures extracted from assigned layer material instances (grouped only)
+    // Flat map already: AllPresetLayerMaterials is (Preset.Layer -> MI)
+    TMap<FName, UMaterialInstance*> CombinedLayers = AllPresetLayerMaterials;
+
+    for (const TPair<FName, UMaterialInstance*>& LM : CombinedLayers)
+    {
+        const FName& LayerName = LM.Key;
+        if (!LM.Value) continue;
+        const UMaterialInstance* AsMI = LM.Value;
+
+        auto SetTexFromMI = [&](const TCHAR* SrcParam, const TCHAR* DstSuffix)
+        {
+            UTexture* Tex = nullptr;
+            FMaterialParameterInfo Info(SrcParam);
+            if (AsMI->GetTextureParameterValue(Info, Tex) && Tex)
+            {
+                const FString ParamName = FString::Printf(TEXT("Layer_%s_%s"), *LayerName.ToString(), DstSuffix);
+                RuntimeMID->SetTextureParameterValue(FName(*ParamName), Tex);
+            }
+        };
+
+        // Standard parameter names to fetch from layer MI
+        SetTexFromMI(TEXT("BaseColor"), TEXT("BaseColor"));
+        SetTexFromMI(TEXT("Normal"),    TEXT("Normal"));
+        SetTexFromMI(TEXT("ORM"),       TEXT("ORM"));
+        // Optional common alternates
+        SetTexFromMI(TEXT("Albedo"),    TEXT("BaseColor"));
+        SetTexFromMI(TEXT("RMA"),       TEXT("ORM"));
+        SetTexFromMI(TEXT("RoughnessMetallicAO"), TEXT("ORM"));
+    }
+}
+
+void ATerrainGen::UpdateLayerSlotsFromPreset(const FProcTerrainPresetDefinition& Def)
+{
+    // Pre-populate LayerMaterials keys with all layer names so users can just assign materials
+    TSet<FName> Names;
+    for (const FSplatMapGroupDefinition& G : Def.Splat.OutputGroups)
+    {
+        for (const FSplatLayerDef& L : G.Layers)
+        {
+            Names.Add(L.Name);
+        }
+    }
+    // Update visible arrays
+    AvailableSplatGroups.Empty();
+    for (const FSplatMapGroupDefinition& G : Def.Splat.OutputGroups)
+    {
+        AvailableSplatGroups.AddUnique(G.GroupName);
+    }
+    AvailableSplatLayers.Empty();
+    AvailableSplatLayers.Reserve(Names.Num());
+    for (const FName& N : Names) AvailableSplatLayers.Add(N);
+}
+
+FName ATerrainGen::GetPresetDisplayName(ETerrainPreset InPreset)
+{
+    switch (InPreset)
+    {
+    case ETerrainPreset::DowntownRuins:            return TEXT("Downtown Ruins");
+    case ETerrainPreset::CrystallineBloomfallZone: return TEXT("Crystalline Bloomfall Zone");
+    case ETerrainPreset::MutatedSwamplands:        return TEXT("Mutated Swamplands");
+    case ETerrainPreset::IrradiatedBadlands:       return TEXT("Irradiated Badlands");
+    case ETerrainPreset::OldWorldAnomaly:          return TEXT("Old World Anomaly");
+    case ETerrainPreset::GothicCathedralApproach:  return TEXT("Gothic Cathedral Approach");
+    case ETerrainPreset::MangroveDeltaFull:        return TEXT("Mangrove Delta Full");
+    case ETerrainPreset::ProvingGroundsSmall:      return TEXT("Proving Grounds Small");
+    case ETerrainPreset::ArenaTiny513:             return TEXT("Arena Tiny 513");
+    default:                                       return TEXT("None");
+    }
+}
+
+void ATerrainGen::UpdateAllPresetLayerSlots()
+{
+    // Build a grouped map of all presets with their layer names
+    TMap<FName, UMaterialInstance*> NewGrouped;
+    auto AddPreset = [&](ETerrainPreset P)
+    {
+        FProcTerrainPresetDefinition Def;
+        if (!ProcTerrainPresets::GetPreset(P, Def)) return;
+        for (const FSplatMapGroupDefinition& G : Def.Splat.OutputGroups)
+        {
+            for (const FSplatLayerDef& L : G.Layers)
+            {
+                const FName FlatKey = FName(*FString::Printf(TEXT("%s.%s"), *GetPresetDisplayName(P).ToString(), *L.Name.ToString()));
+                if (!NewGrouped.Contains(FlatKey))
+                {
+                    NewGrouped.Add(FlatKey, nullptr);
+                }
+            }
+        }
+    };
+    AddPreset(ETerrainPreset::DowntownRuins);
+    AddPreset(ETerrainPreset::CrystallineBloomfallZone);
+    AddPreset(ETerrainPreset::MutatedSwamplands);
+    AddPreset(ETerrainPreset::IrradiatedBadlands);
+    AddPreset(ETerrainPreset::OldWorldAnomaly);
+    AddPreset(ETerrainPreset::GothicCathedralApproach);
+    AddPreset(ETerrainPreset::MangroveDeltaFull);
+    AddPreset(ETerrainPreset::ProvingGroundsSmall);
+    AddPreset(ETerrainPreset::ArenaTiny513);
+
+    // Preserve any existing user assignments
+    // Preserve any existing user assignments
+    for (const TPair<FName, UMaterialInstance*>& OldPair : AllPresetLayerMaterials)
+    {
+        if (NewGrouped.Contains(OldPair.Key) && OldPair.Value)
+        {
+            NewGrouped[OldPair.Key] = OldPair.Value;
+        }
+    }
+    AllPresetLayerMaterials = MoveTemp(NewGrouped);
 }
 
 void ATerrainGen::CalculateSpawnPoints()
@@ -904,6 +1381,19 @@ void ATerrainGen::GenerateTerrain_Editor()
     }
 
     Mesh->SetStaticMesh(GeneratedMesh);
+
+    // Generate splat maps in editor for material previews
+    {
+        FProcTerrainPresetDefinition Def;
+        FProcTerrainPresetDefinition* DefPtr = nullptr;
+        if (Preset != ETerrainPreset::None && ProcTerrainPresets::GetPreset(Preset, Def))
+        {
+            DefPtr = &Def;
+        }
+        GenerateSplatMaps(DefPtr);
+        ApplyMaterialBindings(DefPtr);
+    }
+
     CalculateSpawnPoints();
 }
 

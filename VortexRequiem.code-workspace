@@ -2,6 +2,9 @@
 	"folders": [
 		{
 			"path": "."
+		},
+		{
+			"path": "../../workspace/heightmap-generator-gemini-2.5-pro"
 		}
 	],
 	"settings": {},

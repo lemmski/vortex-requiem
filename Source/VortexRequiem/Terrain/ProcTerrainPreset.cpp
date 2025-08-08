@@ -25,6 +25,25 @@ static void FillDowntownRuins(FProcTerrainPresetDefinition& D)
     D.Hydraulic.NumDroplets = 150000;
     D.Hydraulic.ErosionRate = 0.05f;
     // remaining parameters keep defaults
+
+    // Splat: urban decay
+    D.Splat.BlendDistance = 0.04f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("urban_decay");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("cracked_asphalt"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("rubble_and_dust"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.25f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("weedy_overgrowth"); L.bHasChannel = true; L.Channel = 'G';
+            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.15f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 static void FillCrystalline(FProcTerrainPresetDefinition& D)
@@ -47,6 +66,24 @@ static void FillCrystalline(FProcTerrainPresetDefinition& D)
     D.Hydraulic.NumDroplets = 200000;
     D.Hydraulic.ErosionRate = 0.3f;
     D.Hydraulic.DepositionRate = 0.0f;
+
+    D.Splat.BlendDistance = 0.02f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("alien_biomass");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("toxic_ground_sludge"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("crystalline_growth"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.4f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("resonance_dust"); L.bHasChannel = true; L.Channel = 'G';
+            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.1f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 static void FillMutatedSwamp(FProcTerrainPresetDefinition& D)
@@ -68,6 +105,25 @@ static void FillMutatedSwamp(FProcTerrainPresetDefinition& D)
     D.Hydraulic.NumDroplets = 1200000;
     D.Hydraulic.ErosionRate = 0.1f;
     D.Hydraulic.DepositionRate = 0.35f;
+
+    D.Splat.BlendDistance = 0.03f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("swamp_layers");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("dense_jungle_floor"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("deep_mud"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMaxAltitude = true; L.Rules.MaxAltitude = 0.61f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("algae_scum"); L.bHasChannel = true; L.Channel = 'G';
+            L.Rules.bHasMaxAltitude = true; L.Rules.MaxAltitude = 0.60f;
+            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.05f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 static void FillBadlands(FProcTerrainPresetDefinition& D)
@@ -91,6 +147,31 @@ static void FillBadlands(FProcTerrainPresetDefinition& D)
     D.bHydraulicEnabled = true;
     D.Hydraulic.NumDroplets = 250000;
     D.Hydraulic.ErosionRate = 0.2f;
+
+    D.Splat.BlendDistance = 0.04f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("badlands_strata");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("gravel_base"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("irradiated_glass"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMinAltitude = true; L.Rules.MinAltitude = 0.85f;
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.3f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("red_clay"); L.bHasChannel = true; L.Channel = 'G';
+            L.Rules.bHasMinAltitude = true; L.Rules.MinAltitude = 0.4f;
+            L.Rules.bHasMaxAltitude = true; L.Rules.MaxAltitude = 0.7f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("yellow_sulfur"); L.bHasChannel = true; L.Channel = 'B';
+            L.Rules.bHasMaxAltitude = true; L.Rules.MaxAltitude = 0.4f;
+            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.2f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 static void FillOldWorld(FProcTerrainPresetDefinition& D)
@@ -116,6 +197,29 @@ static void FillOldWorld(FProcTerrainPresetDefinition& D)
     D.bHydraulicEnabled = true;
     D.Hydraulic.NumDroplets = 300000;
     D.Hydraulic.ErosionRate = 0.05f;
+
+    D.Splat.BlendDistance = 0.12f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("temperate_forest");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("meadow_grass"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("forest_loam"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.2f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("exposed_rock"); L.bHasChannel = true; L.Channel = 'G';
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.5f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("ancient_cobblestone"); L.bHasChannel = true; L.Channel = 'B';
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.1f;
+            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.25f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 static void FillGothic(FProcTerrainPresetDefinition& D)
@@ -136,6 +240,24 @@ static void FillGothic(FProcTerrainPresetDefinition& D)
     D.bThermalEnabled = true;
     D.Thermal.Iterations = 3;
     D.bHydraulicEnabled = false;
+
+    D.Splat.BlendDistance = 0.05f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("main");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("corrupted_earth"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("sharp_shale"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.4f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("grave_dust"); L.bHasChannel = true; L.Channel = 'G';
+            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.1f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 static void FillMangrove(FProcTerrainPresetDefinition& D)
@@ -157,6 +279,25 @@ static void FillMangrove(FProcTerrainPresetDefinition& D)
     D.Hydraulic.NumDroplets = 1000000;
     D.Hydraulic.ErosionRate = 0.1f;
     D.Hydraulic.DepositionRate = 0.3f;
+
+    D.Splat.BlendDistance = 0.02f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("main");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("wet_jungle_floor"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("sandbar"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMinAltitude = true; L.Rules.MinAltitude = 0.66f;
+            L.Rules.bHasMaxAltitude = true; L.Rules.MaxAltitude = 0.68f; Group.Layers.Add(L);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("mudflats"); L.bHasChannel = true; L.Channel = 'G';
+            L.Rules.bHasMaxAltitude = true; L.Rules.MaxAltitude = 0.66f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 static void FillProving(FProcTerrainPresetDefinition& D)
@@ -182,6 +323,20 @@ static void FillProving(FProcTerrainPresetDefinition& D)
     D.Hydraulic.NumDroplets = 50000;
     D.Hydraulic.ErosionRate = 0.1f;
     D.Hydraulic.DepositionRate = 0.2f;
+
+    D.Splat.BlendDistance = 0.10f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("main");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("compacted_dirt"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("loose_gravel"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.2f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 static void FillArena(FProcTerrainPresetDefinition& D)
@@ -204,6 +359,20 @@ static void FillArena(FProcTerrainPresetDefinition& D)
 
     D.bHydraulicEnabled = true;
     D.Hydraulic.NumDroplets = 15000;
+
+    D.Splat.BlendDistance = 0.10f;
+    D.Splat.bExportChannelsSeparately = true;
+    {
+        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("main");
+        {
+            FSplatLayerDef Base; Base.Name = TEXT("sand"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
+        }
+        {
+            FSplatLayerDef L; L.Name = TEXT("packed_earth"); L.bHasChannel = true; L.Channel = 'R';
+            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.15f; Group.Layers.Add(L);
+        }
+        D.Splat.OutputGroups.Add(Group);
+    }
 }
 
 bool ProcTerrainPresets::GetPreset(ETerrainPreset Preset, FProcTerrainPresetDefinition& OutDef)

@@ -6,7 +6,12 @@
 #include "Engine/Texture2D.h"
 #include "ProcTerrain.h"
 #include "TerrainTypes.h"
+#include "ProcTerrainPreset.h"
+#include "Delegates/DelegateCombinations.h"
 #include "TerrainGen.generated.h"
+
+class UMaterialInterface;
+class UMaterialInstance;
 
 UENUM()
 enum class EGenerationState : uint8
@@ -63,6 +68,21 @@ public:
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain")
     UMaterialInterface* TerrainMaterial;
+
+    // Flat map: Key = "Preset.Layer" -> Material Instance (editable, supports drag & drop)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat", meta=(AllowedClasses="/Script/Engine.MaterialInstanceConstant", DisplayThumbnail="true"))
+    TMap<FName, UMaterialInstance*> AllPresetLayerMaterials;
+
+    // If true, generated splat maps will be assigned to the mesh material instance using parameter names: Splat_<GroupName>
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    bool bApplySplatToMaterial = true;
+
+    // Convenience: list of detected splat groups and layers for the current preset
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Terrain|Splat")
+    TArray<FName> AvailableSplatGroups;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Terrain|Splat")
+    TArray<FName> AvailableSplatLayers;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain", Replicated)
     float XYScale;
@@ -141,6 +161,17 @@ private:
     UPROPERTY(Transient)
     class UUserWidget* ActiveLoadingWidget;
 
+    // Runtime material instance bound to the mesh
+    UPROPERTY(Transient)
+    class UMaterialInstanceDynamic* RuntimeMID;
+
+    // Generated splat textures per group name (e.g. "urban_decay")
+    UPROPERTY(Transient)
+    TMap<FName, UTexture2D*> SplatGroupTextures;
+
+    // For each group, map LayerName -> ChannelIndex (0=R,1=G,2=B,3=A). Internal only (not exposed to UHT).
+    TMap<FName, TMap<FName, int32>> SplatGroupChannelMap;
+
     FTimerHandle CollisionReadyTimer;
     TArray<TWeakObjectPtr<AActor>> ActorsToReenablePhysics;
 
@@ -159,6 +190,7 @@ private:
     int32 HeightmapWidth;
     int32 HeightmapHeight;
     FString CurrentCacheKey;
+    FString EditorLastCacheKey;
     TArray<FVector> Vertices;
     TArray<int32> Triangles;
     TArray<FVector2D> UVs;
@@ -180,4 +212,14 @@ private:
     void DisableActorPhysicsTemporarily();
     void RestoreActorPhysics();
     static bool LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int32& OutHeight, TArray<uint8>& OutData);
+
+    // --- Splat generation helpers ---
+    void GenerateSplatMaps(const FProcTerrainPresetDefinition* OptionalPresetDef);
+    void ApplyMaterialBindings(const FProcTerrainPresetDefinition* OptionalPresetDef);
+    static UTexture2D* CreateTextureRGBA8(int32 InWidth, int32 InHeight, const TArray<FColor>& Pixels, const FString& DebugName);
+
+    // Populate layer material slots and available names from preset
+    void UpdateLayerSlotsFromPreset(const FProcTerrainPresetDefinition& Def);
+    void UpdateAllPresetLayerSlots();
+    static FName GetPresetDisplayName(ETerrainPreset InPreset);
 };
