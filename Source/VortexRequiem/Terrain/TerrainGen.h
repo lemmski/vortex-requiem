@@ -73,6 +73,29 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat", meta=(AllowedClasses="/Script/Engine.MaterialInstanceConstant", DisplayThumbnail="true"))
     TMap<FName, UMaterialInstance*> AllPresetLayerMaterials;
 
+    // Optional direct texture overrides per layer (Preset.Layer -> textures)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, class UTexture2D*> LayerBaseColorOverrides;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, class UTexture2D*> LayerNormalOverrides;
+    // Packed map override (ORM/ORDp etc.)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, class UTexture2D*> LayerPackedOverrides;
+
+    // Per-layer UV and shading controls (used if present, otherwise we read from MI when available)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, FVector2D> LayerUVScale; // default (1,1)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, FVector2D> LayerUVOffset; // default (0,0)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, float> LayerUVRotationDegrees; // default 0
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, float> LayerNormalStrength; // default 1
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, float> LayerAOStrength; // default 1
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
+    TMap<FName, FVector2D> LayerMinMaxRoughness; // x=min, y=max, defaults (0,1)
+
     // If true, generated splat maps will be assigned to the mesh material instance using parameter names: Splat_<GroupName>
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Terrain|Splat")
     bool bApplySplatToMaterial = true;
@@ -194,6 +217,7 @@ private:
     TArray<FVector> Vertices;
     TArray<int32> Triangles;
     TArray<FVector2D> UVs;
+        TArray<FVector> Normals;
     
     void GenerateTerrain_Editor();
     
@@ -222,4 +246,10 @@ private:
     void UpdateLayerSlotsFromPreset(const FProcTerrainPresetDefinition& Def);
     void UpdateAllPresetLayerSlots();
     static FName GetPresetDisplayName(ETerrainPreset InPreset);
+
+#if WITH_EDITOR
+    class UMaterial* CreateAutoBlendMaterialTransient();
+    UFUNCTION(CallInEditor, Category="Terrain|Debug")
+    void SnapshotCurrentMIDToAsset();
+#endif
 };

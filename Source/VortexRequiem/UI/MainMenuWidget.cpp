@@ -39,7 +39,7 @@ void UMainMenuWidget::NativeConstruct()
         {
             // Ensure we don't bind multiple times if the widget is reconstructed
             TerrainActor->OnAllClientsReady.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
-            TerrainActor->OnAllClientsReady.AddDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+            TerrainActor->OnAllClientsReady.AddUniqueDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
 
             // If terrain is already ready when this widget appears, close immediately
             if (TerrainActor->IsTerrainReady())
@@ -196,9 +196,11 @@ void UMainMenuWidget::DelayedStartGeneration()
 
     if (TerrainActor)
     {
-        // Bind to the new multicast delegate
-        TerrainActor->OnAllClientsReady.AddDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
-        TerrainActor->OnGenerationComplete.AddDynamic(this, &UMainMenuWidget::OnLocalGenerationComplete);
+        // Bind to the new multicast delegate (guard against duplicates)
+        TerrainActor->OnAllClientsReady.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+        TerrainActor->OnAllClientsReady.AddUniqueDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+        TerrainActor->OnGenerationComplete.RemoveDynamic(this, &UMainMenuWidget::OnLocalGenerationComplete);
+        TerrainActor->OnGenerationComplete.AddUniqueDynamic(this, &UMainMenuWidget::OnLocalGenerationComplete);
         
         // Only trigger generation on the server
         if (GetWorld()->GetNetMode() != NM_Client)
@@ -246,6 +248,7 @@ void UMainMenuWidget::HandleGenerationComplete()
     if (TerrainActor)
     {
         TerrainActor->OnAllClientsReady.RemoveDynamic(this, &UMainMenuWidget::HandleGenerationComplete);
+        TerrainActor->OnGenerationComplete.RemoveDynamic(this, &UMainMenuWidget::OnLocalGenerationComplete);
     }
 
     // Hide the menu and return control to the player
