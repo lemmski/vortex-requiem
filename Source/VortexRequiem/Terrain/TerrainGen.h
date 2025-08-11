@@ -238,14 +238,16 @@ private:
     static bool LoadHeightMapRaw(const FString& FilePath, int32& OutWidth, int32& OutHeight, TArray<uint8>& OutData);
 
     // --- Splat generation helpers ---
-    void GenerateSplatMaps(const FProcTerrainPresetDefinition* OptionalPresetDef);
+    // Generation is handled by TerrainSplatUtils; this class only binds results to materials
     void ApplyMaterialBindings(const FProcTerrainPresetDefinition* OptionalPresetDef);
-    static UTexture2D* CreateTextureRGBA8(int32 InWidth, int32 InHeight, const TArray<FColor>& Pixels, const FString& DebugName);
 
     // Populate layer material slots and available names from preset
     void UpdateLayerSlotsFromPreset(const FProcTerrainPresetDefinition& Def);
     void UpdateAllPresetLayerSlots();
     static FName GetPresetDisplayName(ETerrainPreset InPreset);
+
+    // Debug helpers
+    void LogMeshAndMaterialState(const TCHAR* Context);
 
 #if WITH_EDITOR
     class UMaterial* CreateAutoBlendMaterialTransient();

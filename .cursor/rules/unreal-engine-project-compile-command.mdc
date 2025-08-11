@@ -9,3 +9,5 @@ alwaysApply: false
 ```ps
 & "E:/UnrealEngine/Engine/Build/BatchFiles/Build.bat" VortexRequiemEditor Win64 Development -Project="E:/Unreal Projects/VortexRequiem/VortexRequiem.uproject" -WaitMutex -FromMsBuild -NoLiveCoding -Progress
 ```
+
+Don't try to add | cat. Just use the command above to compile.

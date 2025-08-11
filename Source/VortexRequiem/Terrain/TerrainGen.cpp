@@ -56,6 +56,9 @@
 #include "Materials/MaterialExpressionNormalize.h"
 #include "Materials/MaterialExpressionAbs.h"
 #include "Materials/MaterialExpressionConstant.h"
+#include "TerrainSplatUtils.h"
+#include "TerrainPhysicsUtils.h"
+#include "TerrainSpawnUtils.h"
 namespace
 {
     static UMaterialInterface* GetDefaultSurfaceMaterial()
@@ -117,7 +120,7 @@ ATerrainGen::ATerrainGen()
     CurrentState = EGenerationState::Idle;
     bTerrainReady = false;
 
-    bApplySplatToMaterial = true;
+    bApplySplatToMaterial = false;
     RuntimeMID = nullptr;
 
     // Preseed grouped materials map with known presets (empty layer maps; filled later)
@@ -234,7 +237,15 @@ void ATerrainGen::OnConstruction(const FTransform& Transform)
         else
         {
             // Only update material bindings and splats without rebuilding geometry
-            GenerateSplatMaps(&Def);
+            TerrainSplatUtils::GenerateSplatMaps(
+                HeightData,
+                HeightmapWidth,
+                HeightmapHeight,
+                &Def,
+                SplatGroupTextures,
+                SplatGroupChannelMap,
+                AvailableSplatGroups,
+                AvailableSplatLayers);
             ApplyMaterialBindings(&Def);
         }
     }
@@ -559,12 +570,20 @@ void ATerrainGen::Step_CreateMesh()
     // Precompute splat maps if a preset with rules is active
     {
         FProcTerrainPresetDefinition Def;
-        FProcTerrainPresetDefinition* DefPtr = nullptr;
+        const FProcTerrainPresetDefinition* DefPtr = nullptr;
         if (Preset != ETerrainPreset::None && ProcTerrainPresets::GetPreset(Preset, Def))
         {
             DefPtr = &Def;
         }
-        GenerateSplatMaps(DefPtr);
+        TerrainSplatUtils::GenerateSplatMaps(
+            HeightData,
+            HeightmapWidth,
+            HeightmapHeight,
+            DefPtr,
+            SplatGroupTextures,
+            SplatGroupChannelMap,
+            AvailableSplatGroups,
+            AvailableSplatLayers);
     }
 
     // Compute per-vertex normals from triangle faces to avoid degenerate tangent bases
@@ -659,7 +678,7 @@ void ATerrainGen::Step_UploadMesh()
     // Let the builder compute normals and tangents without MikkTSpace to reduce degeneracy issues
     Src.BuildSettings.bRecomputeNormals = true;
     Src.BuildSettings.bRecomputeTangents = true;
-    Src.BuildSettings.bUseMikkTSpace = false;
+    Src.BuildSettings.bUseMikkTSpace = true;
     Src.BuildSettings.bRemoveDegenerates = true;
     // Valinnaiset valotuskartta‑UV:t
     // Src.BuildSettings.bGenerateLightmapUVs = true;
@@ -683,6 +702,7 @@ void ATerrainGen::Step_UploadMesh()
     }
 
     // Static material slot was already added before build; leave as-is
+    LogMeshAndMaterialState(TEXT("After BuildFromStaticMeshDescriptions"));
 
     Mesh->SetStaticMesh(GeneratedMesh);
     Mesh->UpdateBounds();
@@ -698,13 +718,26 @@ void ATerrainGen::Step_UploadMesh()
     // Bind material and splat textures using the preset definition if present
     {
         FProcTerrainPresetDefinition Def;
-        FProcTerrainPresetDefinition* DefPtr = nullptr;
+        const FProcTerrainPresetDefinition* DefPtr = nullptr;
         if (Preset != ETerrainPreset::None && ProcTerrainPresets::GetPreset(Preset, Def))
         {
             DefPtr = &Def;
         }
         ApplyMaterialBindings(DefPtr);
     }
+
+    // If still no material or MID, force a visible fallback
+    if (!Mesh->GetMaterial(0))
+    {
+        UMaterialInterface* FallbackMat = GetDefaultSurfaceMaterial();
+        if (FallbackMat)
+        {
+            Mesh->SetMaterial(0, FallbackMat);
+            UE_LOG(LogTemp, Warning, TEXT("[TerrainGen] Applied fallback material to mesh slot 0: %s"), *FallbackMat->GetName());
+        }
+    }
+
+    LogMeshAndMaterialState(TEXT("After ApplyMaterialBindings"));
 
     CurrentState = EGenerationState::WaitForCollision;
 }
@@ -806,271 +839,9 @@ static FORCEINLINE float SmoothStep(float Edge0, float Edge1, float X)
     return T * T * (3.0f - 2.0f * T);
 }
 
-void ATerrainGen::GenerateSplatMaps(const FProcTerrainPresetDefinition* OptionalPresetDef)
-{
-    SplatGroupTextures.Empty();
-    AvailableSplatGroups.Empty();
-    AvailableSplatLayers.Empty();
+// GenerateSplatMaps moved to TerrainSplatUtils
 
-    // Use preset rules if available, else fall back to a simple default rule set
-    FSplatMapRulesDefinition Rules;
-    if (OptionalPresetDef && OptionalPresetDef->Splat.OutputGroups.Num() > 0)
-    {
-        Rules = OptionalPresetDef->Splat;
-    }
-    else
-    {
-        Rules.BlendDistance = 0.05f;
-        Rules.bExportChannelsSeparately = false;
-        FSplatMapGroupDefinition Group; Group.GroupName = TEXT("base");
-        {
-            FSplatLayerDef Base; Base.Name = TEXT("dirt"); Base.bIsBaseLayer = true; Group.Layers.Add(Base);
-        }
-        {
-            FSplatLayerDef L; L.Name = TEXT("grass"); L.bHasChannel = true; L.Channel = 'R';
-            L.Rules.bHasMaxSlope = true; L.Rules.MaxSlope = 0.35f; Group.Layers.Add(L);
-        }
-        {
-            FSplatLayerDef L; L.Name = TEXT("rock"); L.bHasChannel = true; L.Channel = 'G';
-            L.Rules.bHasMinSlope = true; L.Rules.MinSlope = 0.5f; Group.Layers.Add(L);
-        }
-        Rules.OutputGroups.Add(Group);
-    }
-
-    const int32 W = HeightmapWidth;
-    const int32 H = HeightmapHeight;
-    if (W <= 0 || H <= 0 || HeightData.Num() != W * H)
-    {
-        return;
-    }
-
-    // Altitude [0,1]
-    TArray<float> Altitude; Altitude.SetNumUninitialized(W * H);
-    for (int32 i = 0; i < W * H; ++i)
-    {
-        Altitude[i] = static_cast<float>(HeightData[i]) / 255.0f;
-    }
-
-    // Slope estimation (norm of gradient) then normalise to 0..1
-    TArray<float> Slope; Slope.SetNumZeroed(W * H);
-    float MaxSlope = 0.0f;
-    auto SampleAlt = [&](int32 X, int32 Y) -> float
-        {
-            X = FMath::Clamp(X, 0, W - 1);
-            Y = FMath::Clamp(Y, 0, H - 1);
-            return Altitude[Y * W + X];
-        };
-    for (int32 y = 0; y < H; ++y)
-    {
-        for (int32 x = 0; x < W; ++x)
-        {
-            const float Dzdx = (SampleAlt(x + 1, y) - SampleAlt(x - 1, y)) * 0.5f;
-            const float Dzdy = (SampleAlt(x, y + 1) - SampleAlt(x, y - 1)) * 0.5f;
-            const float G = FMath::Sqrt(Dzdx * Dzdx + Dzdy * Dzdy);
-            Slope[y * W + x] = G;
-            MaxSlope = FMath::Max(MaxSlope, G);
-        }
-    }
-    if (MaxSlope > SMALL_NUMBER)
-    {
-        const float Inv = 1.0f / MaxSlope;
-        for (float& V : Slope) V *= Inv;
-    }
-
-    const float Blend = Rules.BlendDistance;
-
-    // For each output group, compute RGBA texture
-    for (const FSplatMapGroupDefinition& Group : Rules.OutputGroups)
-    {
-        // Separate base vs explicit
-        TArray<const FSplatLayerDef*> ExplicitLayers;
-        const FSplatLayerDef* BaseLayer = nullptr;
-        for (const FSplatLayerDef& L : Group.Layers)
-        {
-            if (L.bIsBaseLayer)
-            {
-                if (!BaseLayer) BaseLayer = &L; else { BaseLayer = nullptr; break; }
-            }
-            else
-            {
-                ExplicitLayers.Add(&L);
-            }
-        }
-        if (!BaseLayer)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("Splat group '%s' must have exactly one base layer. Skipping."), *Group.GroupName.ToString());
-            continue;
-        }
-
-        // Track groups and layers for editor visibility
-        AvailableSplatGroups.AddUnique(Group.GroupName);
-        for (const FSplatLayerDef& L : Group.Layers)
-        {
-            AvailableSplatLayers.AddUnique(L.Name);
-        }
-
-        // Compute explicit layer weights
-        const int32 NumExp = ExplicitLayers.Num();
-        TArray<TArray<float>> LayerWeights; LayerWeights.SetNum(NumExp);
-        for (int32 li = 0; li < NumExp; ++li)
-        {
-            LayerWeights[li].SetNumUninitialized(W * H);
-        }
-        TArray<float> SumExplicit; SumExplicit.SetNumZeroed(W * H);
-
-        for (int32 li = 0; li < NumExp; ++li)
-        {
-            const FSplatLayerDef& L = *ExplicitLayers[li];
-            const FSplatLayerRuleDef& R = L.Rules;
-            float* RESTRICT LW = LayerWeights[li].GetData();
-            for (int32 i = 0; i < W * H; ++i)
-            {
-                float Influence = 1.0f;
-                const float A = Altitude[i];
-                const float S = Slope[i];
-                if (R.bHasMinAltitude)
-                {
-                    Influence *= SmoothStep(R.MinAltitude - Blend, R.MinAltitude + Blend, A);
-                }
-                if (R.bHasMaxAltitude)
-                {
-                    Influence *= (1.0f - SmoothStep(R.MaxAltitude - Blend, R.MaxAltitude + Blend, A));
-                }
-                if (R.bHasMinSlope)
-                {
-                    Influence *= SmoothStep(R.MinSlope - Blend, R.MinSlope + Blend, S);
-                }
-                if (R.bHasMaxSlope)
-                {
-                    Influence *= (1.0f - SmoothStep(R.MaxSlope - Blend, R.MaxSlope + Blend, S));
-                }
-                LW[i] = Influence;
-                SumExplicit[i] += Influence;
-            }
-        }
-
-        // Normalise explicit to sum<=1
-        for (int32 i = 0; i < W * H; ++i)
-        {
-            const float Den = FMath::Max(1.0f, SumExplicit[i]);
-            if (Den > 1.0f + KINDA_SMALL_NUMBER)
-            {
-                SumExplicit[i] = 1.0f; // will be used for base below
-            }
-            for (int32 li = 0; li < NumExp; ++li)
-            {
-                LayerWeights[li][i] /= Den;
-            }
-        }
-
-        // Base weights
-        TArray<float> BaseW; BaseW.SetNumUninitialized(W * H);
-        for (int32 i = 0; i < W * H; ++i)
-        {
-            float FinalExp = 0.0f;
-            for (int32 li = 0; li < NumExp; ++li) FinalExp += LayerWeights[li][i];
-            BaseW[i] = FMath::Clamp(1.0f - FinalExp, 0.0f, 1.0f);
-        }
-
-        // Pack RGBA
-        TArray<FColor> Pixels; Pixels.SetNumZeroed(W * H);
-        bool Used[4] = { false, false, false, false };
-        TMap<FName, int32> LayerToChannel;
-
-        auto ChannelToIndex = [](TCHAR C) -> int32
-            {
-                switch (C)
-                {
-                case 'R': case 'r': return 0;
-                case 'G': case 'g': return 1;
-                case 'B': case 'b': return 2;
-                case 'A': case 'a': return 3;
-                default: return -1;
-                }
-            };
-
-        for (int32 li = 0; li < NumExp; ++li)
-        {
-            const FSplatLayerDef& L = *ExplicitLayers[li];
-            const int32 Channel = L.bHasChannel ? ChannelToIndex(L.Channel) : -1;
-            if (Channel < 0 || Channel > 3)
-            {
-                UE_LOG(LogTemp, Warning, TEXT("Layer '%s' in group '%s' has invalid channel. Skipping."), *L.Name.ToString(), *Group.GroupName.ToString());
-                continue;
-            }
-            Used[Channel] = true;
-            LayerToChannel.Add(L.Name, Channel);
-            const float* LW = LayerWeights[li].GetData();
-            for (int32 i = 0; i < W * H; ++i)
-            {
-                const uint8 V = static_cast<uint8>(FMath::Clamp(LW[i] * 255.0f, 0.0f, 255.0f));
-                FColor& P = Pixels[i];
-                switch (Channel)
-                {
-                case 0: P.R = V; break;
-                case 1: P.G = V; break;
-                case 2: P.B = V; break;
-                case 3: P.A = V; break;
-                }
-            }
-        }
-
-        // Assign base to first available channel
-        int32 BaseChannel = 0;
-        while (BaseChannel < 4 && Used[BaseChannel]) ++BaseChannel;
-        if (BaseChannel >= 4)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("Splat group '%s' had no free channel for base layer '%s'. Overwriting alpha."), *Group.GroupName.ToString(), *BaseLayer->Name.ToString());
-            BaseChannel = 3;
-        }
-        for (int32 i = 0; i < W * H; ++i)
-        {
-            const uint8 V = static_cast<uint8>(FMath::Clamp(BaseW[i] * 255.0f, 0.0f, 255.0f));
-            FColor& P = Pixels[i];
-            switch (BaseChannel)
-            {
-            case 0: P.R = V; break;
-            case 1: P.G = V; break;
-            case 2: P.B = V; break;
-            case 3: P.A = V; break;
-            }
-        }
-        LayerToChannel.Add(BaseLayer->Name, BaseChannel);
-
-        // Create texture
-        UTexture2D* Tex = CreateTextureRGBA8(W, H, Pixels, FString::Printf(TEXT("Splat_%s"), *Group.GroupName.ToString()))
-            ;
-        if (Tex)
-        {
-            SplatGroupTextures.Add(Group.GroupName, Tex);
-            SplatGroupChannelMap.Add(Group.GroupName, LayerToChannel);
-        }
-    }
-}
-
-UTexture2D* ATerrainGen::CreateTextureRGBA8(int32 InWidth, int32 InHeight, const TArray<FColor>& Pixels, const FString& DebugName)
-{
-    if (InWidth <= 0 || InHeight <= 0 || Pixels.Num() != InWidth * InHeight)
-    {
-        return nullptr;
-    }
-    UTexture2D* NewTex = UTexture2D::CreateTransient(InWidth, InHeight, EPixelFormat::PF_B8G8R8A8, DebugName.IsEmpty() ? NAME_None : FName(*DebugName));
-    if (!NewTex || !NewTex->GetPlatformData() || NewTex->GetPlatformData()->Mips.Num() == 0)
-    {
-        return nullptr;
-    }
-    FTexture2DMipMap& Mip = NewTex->GetPlatformData()->Mips[0];
-    // Must lock for write BEFORE realloc per BulkData contract
-    void* Data = Mip.BulkData.Lock(LOCK_READ_WRITE);
-    Data = Mip.BulkData.Realloc(static_cast<int64>(Pixels.Num() * sizeof(FColor)));
-    FMemory::Memcpy(Data, Pixels.GetData(), static_cast<SIZE_T>(Pixels.Num() * sizeof(FColor)));
-    Mip.BulkData.Unlock();
-    NewTex->SRGB = false; // masks should be linear
-    NewTex->CompressionSettings = TC_Masks;
-    NewTex->Filter = TF_Bilinear;
-    NewTex->UpdateResource();
-    return NewTex;
-}
+// CreateTextureRGBA8 moved to TerrainSplatUtils
 
 void ATerrainGen::ApplyMaterialBindings(const FProcTerrainPresetDefinition* OptionalPresetDef)
 {
@@ -1775,130 +1546,39 @@ void ATerrainGen::CalculateSpawnPoints()
         return;
     }
 
-    UStaticMeshDescription* Desc = GeneratedMesh->GetStaticMeshDescription(0);
-    if (!Desc) return;
-
-    const float MaxSlopeCosine = FMath::Cos(FMath::DegreesToRadians(MaxSpawnSlopeInDegrees));
     const FTransform ActorToWorld = GetActorTransform();
-
-    TArray<FVector> CandidateLocations;
-    for (const FPolygonID PolygonID : Desc->Polygons().GetElementIDs())
-    {
-        TArray<FTriangleID> PolygonTriangles;
-        Desc->GetPolygonTriangles(PolygonID, PolygonTriangles);
-        for (const FTriangleID& TriID : PolygonTriangles)
-        {
-            TArray<FVertexInstanceID> VertexInstances;
-            Desc->GetTriangleVertexInstances(TriID, VertexInstances);
-            FVector V0 = Desc->GetVertexPosition(Desc->GetVertexInstanceVertex(VertexInstances[0]));
-            FVector V1 = Desc->GetVertexPosition(Desc->GetVertexInstanceVertex(VertexInstances[1]));
-            FVector V2 = Desc->GetVertexPosition(Desc->GetVertexInstanceVertex(VertexInstances[2]));
-
-            FVector LocalNormal = FVector::CrossProduct(V2 - V0, V1 - V0).GetSafeNormal();
-            FVector WorldNormal = ActorToWorld.TransformVectorNoScale(LocalNormal).GetSafeNormal();
-            if (WorldNormal.Z < 0) WorldNormal = -WorldNormal;
-
-            if (WorldNormal.Z >= MaxSlopeCosine)
-            {
-                CandidateLocations.Add((V0 + V1 + V2) / 3.0f);
-            }
-        }
-    }
-
-    if (CandidateLocations.Num() == 0)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("No suitable flat areas found for spawning."));
-        return;
-    }
-
-    for (int32 i = 0; i < CandidateLocations.Num(); ++i)
-    {
-        int32 j = FMath::RandRange(i, CandidateLocations.Num() - 1);
-        CandidateLocations.Swap(i, j);
-    }
-
-    for (const FVector& LocalCandidate : CandidateLocations)
-    {
-        if (SpawnPoints.Num() >= NumPlayerStarts) break;
-
-        FVector WorldCandidate = ActorToWorld.TransformPosition(LocalCandidate);
-        bool bTooClose = false;
-        for (const FVector& ExistingSpawn : SpawnPoints)
-        {
-            if (FVector::DistSquared(WorldCandidate, ExistingSpawn) < FMath::Square(MinSpawnSeparation))
-            {
-                bTooClose = true;
-                break;
-            }
-        }
-        if (!bTooClose)
-        {
-            SpawnPoints.Add(WorldCandidate);
-            UE_LOG(LogTemp, VeryVerbose, TEXT("[%s] TerrainGen: Added spawn point at %s"),
-                HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"), *WorldCandidate.ToString());
-        }
-    }
-    UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen: Calculated %d spawn points from %d candidates."),
-        HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"), SpawnPoints.Num(), CandidateLocations.Num());
-
 #if WITH_EDITOR
-    FlushPersistentDebugLines(GetWorld());
-    const float DebugSphereRadius = bUseLargeSpawnSpheres ? SpawnClearanceRadius * 5.0f : SpawnClearanceRadius;
-    for (const FVector& SpawnPoint : SpawnPoints)
-    {
-        DrawDebugSphere(GetWorld(), SpawnPoint, DebugSphereRadius, 12, FColor::Green, true, -1, 0, 5.f);
-    }
+    const bool bDraw = true;
+    const float DebugRadius = bUseLargeSpawnSpheres ? SpawnClearanceRadius * 5.0f : SpawnClearanceRadius;
+#else
+    const bool bDraw = false;
+    const float DebugRadius = SpawnClearanceRadius;
 #endif
+    TerrainSpawnUtils::CalculateSpawnPoints(
+        GeneratedMesh,
+        ActorToWorld,
+        NumPlayerStarts,
+        MaxSpawnSlopeInDegrees,
+        MinSpawnSeparation,
+        GetWorld(),
+        SpawnPoints,
+        bDraw,
+        DebugRadius);
+
+    UE_LOG(LogTemp, Warning, TEXT("[%s] TerrainGen: Calculated %d spawn points."),
+        HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT"), SpawnPoints.Num());
 }
 
 
 
 void ATerrainGen::DisableActorPhysicsTemporarily()
 {
-    if (!GetWorld()) return;
-    ActorsToReenablePhysics.Empty();
-    for (TActorIterator<AActor> It(GetWorld()); It; ++It)
-    {
-        AActor* Actor = *It;
-        if (Actor && Actor != this)
-        {
-            TArray<UPrimitiveComponent*> PrimitiveComponents;
-            Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
-            bool bHadPhysics = false;
-            for (UPrimitiveComponent* PrimComp : PrimitiveComponents)
-            {
-                if (PrimComp && PrimComp->IsSimulatingPhysics())
-                {
-                    PrimComp->SetSimulatePhysics(false);
-                    bHadPhysics = true;
-                }
-            }
-            if (bHadPhysics)
-            {
-                ActorsToReenablePhysics.Add(Actor);
-            }
-        }
-    }
+    TerrainPhysicsUtils::DisableActorPhysicsTemporarily(GetWorld(), this, ActorsToReenablePhysics);
 }
 
 void ATerrainGen::RestoreActorPhysics()
 {
-    for (const auto& WeakActor : ActorsToReenablePhysics)
-    {
-        if (AActor* Actor = WeakActor.Get())
-        {
-            TArray<UPrimitiveComponent*> PrimitiveComponents;
-            Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
-            for (UPrimitiveComponent* PrimComp : PrimitiveComponents)
-            {
-                if (PrimComp)
-                {
-                    PrimComp->SetSimulatePhysics(true);
-                }
-            }
-        }
-    }
-    ActorsToReenablePhysics.Empty();
+    TerrainPhysicsUtils::RestoreActorPhysics(ActorsToReenablePhysics);
 }
 
 void ATerrainGen::GenerateTerrain_Editor()
@@ -2053,6 +1733,7 @@ void ATerrainGen::GenerateTerrain_Editor()
     }
 
     // Keep the pre-added slot
+    LogMeshAndMaterialState(TEXT("Editor: After BuildFromStaticMeshDescriptions"));
 
     Mesh->SetStaticMesh(GeneratedMesh);
 
@@ -2067,11 +1748,65 @@ void ATerrainGen::GenerateTerrain_Editor()
         HeightmapWidth = W;
         HeightmapHeight = H;
         HeightData = LocalHeightData;
-        GenerateSplatMaps(DefPtr);
+        TerrainSplatUtils::GenerateSplatMaps(
+            HeightData,
+            HeightmapWidth,
+            HeightmapHeight,
+            DefPtr,
+            SplatGroupTextures,
+            SplatGroupChannelMap,
+            AvailableSplatGroups,
+            AvailableSplatLayers);
         ApplyMaterialBindings(DefPtr);
     }
+    LogMeshAndMaterialState(TEXT("Editor: After ApplyMaterialBindings"));
 
     CalculateSpawnPoints();
+}
+
+void ATerrainGen::LogMeshAndMaterialState(const TCHAR* Context)
+{
+    UE_LOG(LogTemp, Warning, TEXT("[TerrainGen][%s] Mesh=%s, SM=%s"),
+        Context,
+        Mesh ? *Mesh->GetName() : TEXT("(null)"),
+        (Mesh && Mesh->GetStaticMesh()) ? *Mesh->GetStaticMesh()->GetName() : TEXT("(null)"));
+
+    if (Mesh && Mesh->GetStaticMesh())
+    {
+        UStaticMesh* SM = Mesh->GetStaticMesh();
+        const int32 NumMats = SM->GetStaticMaterials().Num();
+        UE_LOG(LogTemp, Warning, TEXT("[TerrainGen][%s] NumMaterials=%d"), Context, NumMats);
+        for (int32 i = 0; i < NumMats; ++i)
+        {
+            const FStaticMaterial& Mat = SM->GetStaticMaterials()[i];
+            UE_LOG(LogTemp, Warning, TEXT("[TerrainGen][%s] Slot %d: %s"), Context, i, *Mat.MaterialInterface->GetName());
+        }
+    }
+
+    UMaterialInterface* ActiveMat = Mesh ? Mesh->GetMaterial(0) : nullptr;
+    UE_LOG(LogTemp, Warning, TEXT("[TerrainGen][%s] Mesh Slot0 Material=%s, RuntimeMID=%s"),
+        Context,
+        ActiveMat ? *ActiveMat->GetName() : TEXT("(null)"),
+        RuntimeMID ? *RuntimeMID->GetName() : TEXT("(null)"));
+
+    if (RuntimeMID)
+    {
+        // Dump presence of key params
+        auto LogHasParamTex = [&](const TCHAR* P)
+        {
+            UTexture* Tex = nullptr;
+            const bool bHas = RuntimeMID->GetTextureParameterValue(FMaterialParameterInfo(P), Tex) && Tex;
+            UE_LOG(LogTemp, Warning, TEXT("[TerrainGen][%s] Param %s -> %s"), Context, P, bHas ? *Tex->GetName() : TEXT("(none)"));
+        };
+        LogHasParamTex(TEXT("Splat_Any"));
+        LogHasParamTex(TEXT("Layer0_BaseColor"));
+        LogHasParamTex(TEXT("Layer1_BaseColor"));
+        LogHasParamTex(TEXT("Layer2_BaseColor"));
+        LogHasParamTex(TEXT("Layer3_BaseColor"));
+    }
+
+    // Sanity-check vertex/triangle counts
+    UE_LOG(LogTemp, Warning, TEXT("[TerrainGen][%s] Verts=%d, Tris=%d, W=%d, H=%d"), Context, Vertices.Num(), Triangles.Num()/3, HeightmapWidth, HeightmapHeight);
 }
 
 #if WITH_EDITOR
